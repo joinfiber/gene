@@ -65,7 +65,9 @@ The client records at full resolution, decodes the audio natively, finds the spe
 
 ## Build on it
 
-Strip the camera and the auto-edit away and what's left is general: *selectively disclose content to a chosen subset of a trust graph, end-to-end, where the operator learns nothing, on cheap infra.* The only video-specific thing in the transport is one record. Other apps on the same floor — accounts-based messengers, private-event "DM for address" tools, location sharing with chosen people — are sketched in **[PRIMITIVE.md](PRIMITIVE.md)**, including the trust spectrum (accountless → accounts) and a worked non-messaging example.
+Strip the camera and the auto-edit away and what's left is general: *selectively disclose content to a chosen subset of a trust graph, end-to-end, where the operator learns nothing, on cheap infra.* The only video-specific thing in the transport is one record — generalize it and the floor carries anything.
+
+gene deliberately sits at the **privacy ceiling**: the most private, least convenient configuration this architecture allows (accountless, no cloud, re-pair on loss). That's the point of it — a high-water mark to build *down* from. A Marco-Polo clone with logins, cloud backup, and long-term storage is a perfectly good thing to build here; it just trades some privacy for reach and sits lower on the wall. The primitive **bounds** how private anything on top can be — and improving the primitive (forward secrecy, metadata resistance) raises that bound for everyone above it. The trust spectrum, a worked non-messaging example, and the whole "ceiling" model are in **[PRIMITIVE.md](PRIMITIVE.md)**.
 
 ## Tests
 

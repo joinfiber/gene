@@ -44,23 +44,40 @@ The **only** thing video-specific in the transport is one record —
 Generalize that to "opaque app payload + optional encrypted blob" and the floor
 carries anything.
 
-## The trust spectrum (where accounts fit)
+## The privacy ceiling
 
-The primitive is zero-knowledge. The **app on top chooses how much trust to add
-for UX** — a dial, not a contradiction:
+gene is deliberately pinned to one end of a hard tradeoff: it is the **most
+private, least convenient** configuration this architecture allows. Accountless,
+no server-side recovery, no cloud, re-pair on device loss, no contact sync — each
+of those "inconveniences" is privacy bought at the price of comfort. That's not a
+limitation to apologize for; it's the **reference point.** gene sets the *ceiling*
+— the highest privacy you can offer on a zero-knowledge relay — and it sets it
+about as high as the design space goes.
 
-| Posture | The app holds | You get | You give up |
+Everything built on the primitive sits **at or below that ceiling.** An app buys
+convenience by trading privacy back, picking a point on the way down:
+
+| Where it sits | The app holds | Gains | Costs |
 |---|---|---|---|
-| **Accountless** (gene today) | nothing | maximum privacy; nothing to breach | recovery (you re-pair), easy multi-device |
-| **Accounts + E2E vault** | an *encrypted* vault (keys + contacts), unlockable only by the user | email sign-in, multi-device, contact sync, recovery — **operator still can't read content** | a passphrase to remember; trust that the app keeps the vault E2E |
-| **Convenience-first** | keys in the clear | the smoothest UX | E2E against the operator |
+| **At the ceiling** — raw gene | nothing | maximum privacy; nothing to breach | recovery (re-pair), easy multi-device |
+| **Just below** — accounts + an E2E vault | an *encrypted* vault (keys + contacts), unlockable only by the user | email sign-in, multi-device, sync, recovery — **the operator still can't read content** | a passphrase to remember; trust the app keeps the vault sealed |
+| **Lower still** — convenience-first | keys/contacts in the clear | the smoothest, most familiar UX | E2E against the operator |
 
-The crucial property: **moving up the dial need not expose content to the
-operator.** "Sign in with email and see your contacts on a new phone" is the app
-custodying an encrypted blob (cf. Signal's PIN, WhatsApp's encrypted backup) —
-the [device-migration tension in BACKEND.md §9](BACKEND.md) turned into a product
-decision. Different audiences sit at different points on the dial over the same
-secure floor.
+A Marco-Polo clone with logins, cloud backup, and long-term storage is a
+perfectly legitimate thing to build here — it just sits lower on the wall, having
+spent some privacy for reach and ease (cf. Signal's PIN, WhatsApp's encrypted
+backup — the [device-migration tension in BACKEND.md §9](BACKEND.md) made a
+product decision). The primitive doesn't forbid that; it **bounds** it: the
+operator-blind transport is the floor under every tier, so even a
+convenience-heavy app inherits a relay that can't read content — *as long as it
+keeps the vault E2E.* The genuinely low-privacy choice is the one that breaks
+that floor by holding keys in the clear.
+
+And the ceiling can be **raised.** Forward secrecy, metadata resistance (padding,
+fixed-cadence polling, a mixnet), at-rest encryption of the local library — each
+improvement to the *primitive* lifts the maximum for everything above it. The
+hope isn't only that people build apps beneath this ceiling; it's that someone
+pushes the ceiling higher than gene has, and the whole spectrum rises with it.
 
 ## Worked example 1 — Marco Polo, with accounts
 
