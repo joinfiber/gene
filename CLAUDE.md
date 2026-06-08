@@ -5,13 +5,16 @@ and the docs below; this is a real, working system, not a sketch.
 
 ## What this is
 
-**gene** — slow, high-fidelity, one-to-one video missives. A take is recorded,
-**auto-edited on-device** (dead air trimmed via acoustic analysis), then sent
-**end-to-end encrypted** through a **zero-knowledge Cloudflare relay** and
-destroyed server-side after delivery. Accountless: people connect via a
-single-use invite link. The product framing is "familiar, high-quality, free
-video messaging," not a privacy pitch — but the privacy properties are real (see
-SECURITY.md).
+**gene** is a **zero-knowledge, capability-secured, end-to-end-encrypted delivery
+primitive** — a Cloudflare relay + a client crypto/pairing/messaging core — shipped
+with a **Flutter reference app** that proves it end to end: slow, high-fidelity,
+one-to-one video missives, **auto-edited on-device** (dead air trimmed via acoustic
+analysis), sent E2E through the relay and destroyed server-side after delivery. The
+repo *is* the system — no app store, no hosted service. The primitive sets the
+"privacy ceiling"; apps build *down* from it (see PRIMITIVE.md). Accountless: people
+connect via a single-use invite link. The demo's product framing is "familiar,
+high-quality, free video messaging," not a privacy pitch — but the privacy
+properties are real (see SECURITY.md).
 
 Note: the working folder is `C:\dev2\roger` and the Android package is `dev.gene`
 — the product was renamed Roger→Gene; the folder path was intentionally left as
@@ -29,19 +32,20 @@ Note: the working folder is `C:\dev2\roger` and the Android package is `dev.gene
 ## Repo map
 
 ```
-lib/src/
+lib/src/                                 # ── the primitive (delivery core) ──
   crypto/        Crypto — the only crypto surface (Ed25519, X25519, HKDF, XChaCha20-Poly1305, SHA-256)
   identity/      device identity (Ed25519 seed) in the Keystore
   pairing/       the authenticated single-use handshake, Contact model, RelayTransport (+ in-memory fake)
-  messaging/     per-message crypto, send/sync service, the local missive library
+  messaging/     per-message crypto, the send · fetchNew · confirm service, the local missive library
   storage/       one shared Keystore posture
+                                         # ── the reference app (video missives) ──
   contacts/      home list · connect (invite) · conversation screens
   recorder/      camera lifecycle (Riverpod Notifier) + capture UI
   editor/        tighten (auto-edit) orchestration over the Pigeon boundary
   playback/      looping player + send action
-android/app/src/main/kotlin/dev/gene/   native editing engine (AudioAnalyzer · VideoSplicer · EditorApiImpl)
+android/app/src/main/kotlin/dev/gene/   native editing engine (AudioAnalyzer · VideoSplicer · EditorApiImpl) — reference app
 pigeons/editor_api.dart                  the typed Dart↔Kotlin boundary (source of truth; regenerate, don't hand-edit *.g.*)
-relay/                                   the zero-knowledge relay (TypeScript; Workers + SQLite DOs + R2)
+relay/                                   the zero-knowledge relay (TypeScript; Workers + SQLite DOs + R2) — the primitive's server
 ```
 
 ## Security invariants (do not violate when editing or advising)

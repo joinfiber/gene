@@ -2,7 +2,9 @@
 
 ## Principles
 
-Minimalist, performant, well-patterned — _thoughtful and efficient, not clever_. Abstractions appear only where they earn their keep: the Dart↔native seam is typed and generated; crypto lives behind one small surface; the relay is reached through one interface with an in-memory twin for tests; and the one genuinely stateful thing (the camera) gets a real controller, while nothing else is dressed up to look like one.
+Minimalist, performant, well-patterned — _thoughtful and efficient, not clever_. Abstractions appear only where they earn their keep: the Dart↔native seam is typed and generated; crypto lives behind one small surface; the relay is reached through one interface (`RelayTransport`) — the integration seam for the delivery primitive, with an in-memory twin that exercises the full client crypto path in tests; and the one genuinely stateful thing (the camera) gets a real controller, while nothing else is dressed up to look like one.
+
+**Primitive, with a demo.** The core is a zero-knowledge delivery primitive — `crypto/`, `pairing/`, `messaging/`, and the `relay/` — that moves only ciphertext and public keys. The video-missive UI (`recorder/`, `editor/`, `playback/`, `contacts/`) is its reference app: the highest-trust point on a spectrum others build _down_ from ([PRIMITIVE.md](PRIMITIVE.md)). Read the layout below as core-plus-consumer, not one flat app.
 
 ## Layout
 
@@ -25,7 +27,7 @@ lib/
       pairing_providers.dart     identity / contacts / relay providers
     messaging/
       message_crypto.dart        signed-message format + per-message subkeys
-      messaging_service.dart     send / sync  (encrypt → relay → decrypt)
+      messaging_service.dart     send · fetchNew · confirm  (encrypt → relay → decrypt)
       message_store.dart         the local missive library
       models.dart                Missive · ReceivedMissive
       messaging_providers.dart   library + conversation orchestration
@@ -73,9 +75,9 @@ To add a native capability: edit the schema → regenerate → implement the new
 - **`tightenControllerProvider`** — orchestrates one auto-edit; its state is just "in flight?" so the UI can show a busy overlay.
 - **`editorApiProvider`** — the native engine, injected so callers depend on the boundary (and tests can override it).
 - **`identityProvider`** — the device identity, loaded (or created) once.
-- **`contactsProvider`** — the `ContactsController`; mutations publish immediately and persist through a **serialized write chain**, so two near-simultaneous pairings can't clobber each other in the single stored blob.
+- **`contactsProvider`** — the `ContactsController`; mutations publish immediately and persist through a **serialized write chain**, and field-level updates (`mutate` / `advanceInboundCursor`) merge onto the *live* contact so a concurrent send and sync can't clobber each other's seq/cursor.
 - **`relayTransportProvider`** — the `RelayTransport`; HTTP in the app, swapped for the in-memory fake in tests.
-- **`libraryProvider`** / **`conversationProvider`** — the received-missive library, and the orchestrator that runs a send/sync and then keeps the service, the contact (its seq/cursor), and the library in step.
+- **`libraryProvider`** / **`missivesDirProvider`** / **`conversationProvider`** — the received-missive library (`ingest` dedups by feed+seq, so a re-sync after a crash never doubles a missive), the shared directory each missive's relative filename resolves against, and the orchestrator that runs a send or a sync (`fetchNew` → persist → `confirm`) and keeps the service, the contact (its seq/cursor), and the library in step.
 
 `recorder_screen.dart` composes the recorder providers with `.select`, so the per-second recording timer rebuilds only the status pill — never the camera texture.
 
@@ -94,14 +96,16 @@ Defensive throughout: ECDH rejects an all-zero (low-order) shared secret, and ev
 
 ## Conversations & delivery
 
-A conversation is **two unidirectional, append-only feeds** (BACKEND.md §3–§4). Each is bound to a fresh **per-feed Ed25519 key** — never the identity key — so the relay can't tell that two feeds share an author (social-graph protection).
+A conversation is **two unidirectional, append-only feeds** (BACKEND.md §3–§4). Each is bound to a fresh **per-feed Ed25519 key** — never the identity key — so the relay can't tell that two feeds share an author (social-graph protection). These un-linkability and authenticated-pairing properties belong to the *primitive* — any app on this core inherits them; the missive UI just surfaces the safety number.
 
 - **Sealing** — each entry is sealed with XChaCha20-Poly1305 under a per-message subkey `HKDF(K, feedId‖seq)`; the feed id *is* the direction, so sender and receiver derive the same key with no ratchet state to sync. The signed bytes (`seq‖ciphertext`) and the subkey derivation live in `message_crypto.dart` — one source of truth the relay's verifier matches byte-for-byte.
 - **Media** — sealed under a fresh per-blob key, uploaded to R2; the (sealed) entry carries the object id and that key, so the media key never reaches the relay. (Sealed in memory — fine for short missives; streaming AEAD is the large-video upgrade.)
-- **Lazy feed creation** — `MessagingService.send` appends, and on a "feed not found" binds the feed with its author key and retries. Pairing therefore creates *no* feeds, which removes the orphan-feed-on-a-lost-race hazard entirely.
-- **Destroy-after-delivery** — `sync` pulls new entries, decrypts, downloads + decrypts media into the local library (`MessageStore`), then acks; the relay deletes the delivered entry and blob. Each device keeps the only durable copy.
+- **Lazy feed creation** — `MessagingService.send` appends, and on a "feed not found" binds the feed with its author key and retries. A retried send (the relay already holds that seq) is treated as delivered, and a freshly-uploaded blob is deleted on any append failure — so neither a feed nor a media object is orphaned. Pairing therefore creates *no* feeds.
+- **Destroy-after-delivery** — split for crash-safety: `fetchNew` pulls new entries, decrypts, and writes media to disk (stopping at the first it can't fully receive); the `Conversation` orchestrator persists that library; only then does `confirm` ack — the relay deletes the delivered entry, and the client deletes the R2 blob. The relay copy is never destroyed before the device has durably kept its own.
 
 ## The editing engine (native)
+
+This is a feature of the reference app, not the delivery primitive — an example of the on-device, pre-encryption processing the core enables, kept off any server.
 
 - **`AudioAnalyzer`** — the decision math (`otsu`, `computeKeepRanges`, expressed as interval `Span` operations: trim → collapse → merge → complement) is pure over decoded PCM with no Android dependencies, which is what makes it unit-testable on the JVM. Only `decodeAudioMono` touches `MediaCodec`; it reads the decoder's *output* format (16-bit or float PCM), carries partial frames across buffers, and releases the codec/extractor in a `finally` on every path.
 - **`VideoSplicer`** — Media3 `Transformer`; driven on the main thread because Transformer needs a `Looper`. Each export owns its `Transformer`; a second request while one is in flight is rejected, and `cancel()` is wired to teardown.
@@ -122,6 +126,7 @@ Measured on real footage: Whisper omitted **100%** of injected fillers and repor
 | Per-feed write keys, never the identity key | keeps the relay from linking one user's separate relationships |
 | `RelayTransport` interface + in-memory fake | the whole pairing + messaging crypto path is tested without a network |
 | Media sealed in memory, client-side | simple and correct for short missives; streaming AEAD is the large-video upgrade |
+| Relay URL is build config (`GENE_RELAY_URL`, default localhost) | the relay is the shared rendezvous; a build points at its own, and the public repo ships no baked-in server |
 | Cover-fit preview via an aspect-ratio box | a `Transform.scale` approach stretched the 4:3 preview vertically |
 | Wake-lock while the camera is open | the system screen-timeout was pausing the activity and destroying in-progress recordings |
 | Filler removal deferred | neither transcription nor energy detects it; it's real R&D, not a quick add |

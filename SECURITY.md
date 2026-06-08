@@ -2,15 +2,17 @@
 
 This is the document to read with a skeptical eye. It states what gene protects,
 **points each claim at the code that enforces it** so you can verify rather than
-trust, and is honest about what it does *not* defend. The full design rationale
-is in [BACKEND.md](BACKEND.md); this is the auditor's view.
+trust, and is honest about what it does *not* defend. gene is a zero-knowledge
+delivery **primitive**; the properties below are the **security ceiling any app
+built on it inherits** — the video-missive app is the reference consumer. The full
+design rationale is in [BACKEND.md](BACKEND.md); this is the auditor's view.
 
 ## The one-sentence claim
 
-> Message content — text and video — is encrypted on the sender's device and
-> decryptable only on the recipient's. The relay (Cloudflare) and anyone who
-> controls it see **only ciphertext and coarse metadata**, never content, keys,
-> or your durable identity.
+> Message content — whatever bytes an app moves over gene (here, video) — is
+> encrypted on the sender's device and decryptable only on the recipient's. The
+> relay (Cloudflare) and anyone who controls it see **only ciphertext and coarse
+> metadata**, never content, keys, or your durable identity.
 
 ## Trust model: what runs where
 
@@ -63,8 +65,9 @@ is itself ciphertext. There is no plaintext and no usable key on the relay side.
 | Identity keys hidden from the relay | exchanged *inside* the sealed handshake payload/response; the relay sees only ephemeral + per-feed public keys |
 | Invites are single-use | Durable Object compare-and-set under the input gate — `relay/src/invite_slot.ts` (`redeem`) |
 | Entries can't be forged with a leaked read capability | every append is signature-checked against the pinned per-feed key — `relay/src/feed_slot.ts`, `relay/src/crypto.ts` |
-| Replay/regression rejected | per-feed acked-watermark — `relay/src/feed_slot.ts` (`append` rejects `seq ≤ ackedUpTo`) |
-| Destroy-after-delivery | recipient acks → relay deletes the entry and the R2 blob — `messaging_service.dart` (`sync`), `relay/src/feed_slot.ts` (`ack`), media `DELETE` |
+| Replay/regression rejected | per-feed acked-watermark — `relay/src/feed_slot.ts` (`append` rejects `seq ≤ ackedUpTo`; `ack` clamps the watermark to the highest stored seq, so a reader can't brick the author) |
+| Destroy-after-delivery | recipient persists locally, *then* destroys the relay copy — `messaging_service.dart` (`fetchNew` writes media to disk; `confirm` acks + deletes), ordered persist-before-destroy in `messaging_providers.dart` (`Conversation.sync`); `relay/src/feed_slot.ts` (`ack`), media `DELETE` |
+| Media can't be silently overwritten | `PUT /media/:id` is write-once (`etagDoesNotMatch:"*"` → 409) — `relay/src/index.ts` (`handleMedia`) |
 | Keys at rest | identity seed + per-contact `K`/write seeds in the platform Keystore — `lib/src/identity/identity_store.dart`, `lib/src/storage/secure_storage.dart` |
 
 ## What it does NOT defend (the honest edges)

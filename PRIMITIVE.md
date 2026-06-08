@@ -1,10 +1,14 @@
 # gene as a primitive
 
-gene is a video-missive app, but only the top of it is about video. Underneath
-is a small, general capability that other apps can build on. This document names
-that primitive, draws the line between it and the application, and works through
-what you'd build on top — including a worked example in a completely different
-domain.
+gene **is** a primitive: a zero-knowledge, capability-secured, end-to-end-encrypted
+delivery system — a near-free Cloudflare relay plus a client crypto/pairing/messaging
+core — for selectively disclosing content to chosen people without the operator ever
+learning what moved. The slow, high-fidelity **video-missive app is its reference
+demonstration**: a complete, working proof that the primitive carries a real,
+high-standards product end to end. This document names the primitive, draws the line
+between it and the demo built on it, sets the privacy ceiling it establishes for
+everything downstream, and works through other apps you'd build on it — including one
+in a completely different domain.
 
 ## The primitive, in one line
 
@@ -36,13 +40,15 @@ The line already exists in the codebase:
 
 | Layer | Code | Role |
 |---|---|---|
-| **Primitive** | `lib/src/crypto`, `lib/src/identity`, `lib/src/pairing`, `lib/src/messaging` (transport), `relay/` | identity, pairing, sealed feeds, media, the zero-knowledge relay |
-| **Application** | `lib/src/recorder`, `lib/src/editor`, `lib/src/playback`, the video-shaped `Missive` | capture, on-device auto-edit, playback — the gene experience |
+| **Primitive** | `lib/src/crypto`, `lib/src/identity`, `lib/src/pairing` (incl. the relay transport), `lib/src/messaging/message_crypto`, `relay/` | identity, pairing, sealed feeds, media, the zero-knowledge relay |
+| **Application** | `lib/src/recorder`, `lib/src/editor`, `lib/src/playback`, the video-shaped `Missive`/`ReceivedMissive` + the file-coupled `MessagingService` | capture, on-device auto-edit, playback — the reference demo built on the primitive |
 
-The **only** thing video-specific in the transport is one record —
-`Missive { kind, mediaId, mediaKey, durationMs }` (`lib/src/messaging/models.dart`).
-Generalize that to "opaque app payload + optional encrypted blob" and the floor
-carries anything.
+The video-specific surface is small, but it's more than one record: the
+`Missive`/`ReceivedMissive` models (`lib/src/messaging/models.dart`) and the
+file-shaped I/O in `MessagingService` (`send(videoPath: …)`, the `.mp4` write in
+`fetchNew`). Generalize those to "opaque app payload + optional encrypted blob handle"
+and the floor carries anything — the feed/seal/sign machinery beneath them
+(`message_crypto.dart`, the relay transport) is already content-agnostic.
 
 ## The privacy ceiling
 
@@ -84,7 +90,7 @@ pushes the ceiling higher than gene has, and the whole spectrum rises with it.
 A developer wants the familiar thing: download the app, sign in, your people are
 there. They:
 
-1. Fork the relay, set their own R2 bucket + domain, deploy.
+1. Fork the relay, set their own R2 bucket (domain optional), deploy.
 2. Build a polished app on the primitive: capture/playback UX, push, discovery.
 3. Add an **account layer** — email login backed by an E2E-encrypted vault, so the
    user's identity keys + contacts sync across devices and survive a reinstall.
@@ -101,10 +107,11 @@ Alice has a house show; she wants friends-and-friends-of-friends, not the world,
 and the address stays private until she lets someone in. This maps onto the
 primitive almost unchanged — which is the real validation.
 
-Two tiers, both already supported:
+Two tiers — one the primitive supports today, one a thin addition:
 
 - **Teaser** — "there's a show Friday, this vibe." Broadcast-ish, low/no secrecy.
-  Discovery.
+  Discovery. (The feed model allows a publicly-shared-capability feed for this; the
+  reference app just doesn't expose broadcast yet.)
 - **Address** — *not* in the public feed. When Bob asks and Alice grants, the app
   delivers the address as a **sealed entry on their pair channel**. That is
   gene's existing pair-and-seal, re-skinned — **no new crypto.** Intercept-proof,
@@ -141,21 +148,25 @@ plus a capability-gated, operator-blind, E2E channel to specific people.
 
 ## What it would take to make it drop-in
 
-Honest current state: **the relay is already general** (content-agnostic). **The
-client core is general but bundled** inside the gene app, and the payload is
-video-shaped. To make it a primitive others literally build on:
+Honest current state: **the relay is already general** (content-agnostic), and **the
+client core is already general** — it's simply **not yet split out into its own
+package**, and the reference demo's payload is video-shaped. To make it a primitive
+others literally build on:
 
-1. **Extract `gene_core`** — `crypto` + `pairing` + `messaging` (transport) as a
-   reusable Dart package with a clean public API.
-2. **Generalize the payload** — `Missive` → an opaque, app-defined payload +
-   optional encrypted blob. The transport already seals arbitrary bytes; only the
-   model is video-shaped.
-3. **Write the wire-protocol spec** — handshake transcript, sealing formats, the
-   signed-entry bytes, the feed contract — so clients in any language interoperate.
-   [relay/README.md](relay/README.md) (HTTP), [BACKEND.md](BACKEND.md) (crypto),
-   and `lib/src/messaging/message_crypto.dart` (formats) are ~80% of it.
-4. **Relay-as-template** — "fork, set your bucket + domain, deploy" docs (mostly
-   present in relay/README.md).
+1. **Extract `gene_core`** — `crypto`, `pairing` (including the relay transport), and
+   the generic half of `messaging` (`message_crypto`) as a reusable Dart package; the
+   file-coupled `MessagingService`/`MessageStore` get generalized per step 2, not
+   lifted as-is.
+2. **Generalize the payload** — `Missive`/`ReceivedMissive` → an opaque, app-defined
+   payload + an optional encrypted-blob handle, and `MessagingService`'s file I/O →
+   byte streams. The feed/seal/sign machinery beneath is already content-agnostic.
+3. **Write the wire-protocol spec** — the handshake transcript + `K` derivation
+   (`pairing_service.dart`), the sealing formats + signed-entry bytes
+   (`message_crypto.dart`), and the feed contract — so clients in any language
+   interoperate. [relay/README.md](relay/README.md) (HTTP) and [BACKEND.md](BACKEND.md)
+   (crypto) are ~80% of it.
+4. **Relay-as-template** — "fork, set your bucket (+ optional domain), deploy" docs
+   (mostly present in relay/README.md; no domain required — it rides on `*.workers.dev`).
 
 None of that is new cryptography — it's repackaging and a spec. Call it ~80% of
 the way to a clean SDK.

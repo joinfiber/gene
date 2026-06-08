@@ -1,6 +1,6 @@
 # Backend — identity, pairing & delivery
 
-> Design **and** implementation. The relay (zero-knowledge, tested in the real `workerd` runtime) and the client's pairing + messaging crypto are built — the wire contract is in [relay/README.md](relay/README.md) and the client layout in [ARCHITECTURE.md](ARCHITECTURE.md). This document is the _why_.
+> Design **and** implementation. This is the spec of the **delivery primitive** — the zero-knowledge relay plus the client pairing/messaging crypto — of which the video-missive app ([ARCHITECTURE.md](ARCHITECTURE.md)) is the reference consumer (see [PRIMITIVE.md](PRIMITIVE.md) for the primitive/app seam). It's built and tested in the real `workerd` runtime; the wire contract is in [relay/README.md](relay/README.md). This document is the _why_.
 
 The whole backend follows from one constraint: **the relay must learn as little as possible and still route bytes** — and a second: **it must fit Cloudflare's free tier.** Those two pressures, taken seriously, produce the entire model below. There are no accounts. There is no plaintext on the server. The relay is interchangeable and zero-knowledge; identity and trust live on the two devices.
 
@@ -39,15 +39,15 @@ sequenceDiagram
     participant B as Bob (device)
 
     Note over A: generate per-invite key ia, link secret S, invite id I
-    A->>R: PUT /invite/I  { enc_S( A_id, ia_pub, A→B read-cap, conv seed ) }
+    A->>R: PUT /invite/I  { enc_S( A_id, ia_pub, A→B read-cap, A's transcript sig ) }
     Note over A,B: send link  …/i/I#S  over SMS / IG  (S lives in the fragment)
     B->>R: GET /invite/I
     R-->>B: ciphertext
-    Note over B: k = HKDF(S); decrypt → A_id, ia_pub, feed, seed<br/>ephemeral ib → Z = ECDH(ib, ia_pub)
+    Note over B: k = HKDF(S); decrypt → A_id, ia_pub, feed, sig; verify sig<br/>ephemeral ib → Z = ECDH(ib, ia_pub)
     B->>R: POST /invite/I/redeem { seal_to(ia_pub): B_id, ib_pub, B→A read-cap }
     Note over R: Durable Object: single-threaded compare-and-set<br/>open → redeemed, atomically. A second redeem fails.
     R-->>B: ok
-    A->>R: GET /invite/I/redeem   (poll, or content-free wake push)
+    A->>R: GET /invite/I/redeem   (poll)
     R-->>A: Bob's sealed response
     Note over A: Z = ECDH(ia, ib_pub) → both derive K = HKDF(Z, salt S, transcript)
     R->>R: TTL elapses → slot deleted
@@ -77,20 +77,20 @@ The shape is RSS/Atom: a feed is a list of entries pulled by a subscriber. You c
 ```mermaid
 sequenceDiagram
     participant A as Alice
-    participant R as Relay (Worker + D1 / R2)
+    participant R as Relay (Worker + Durable Objects / R2)
     participant B as Bob
     Note over A: compose → media? encrypt → R2.  entry = AEAD_K( text | media-ref )
     A->>R: POST /feed/<A→B> { seq, sig(feedkey), ct }
     Note over R: verify sig vs feed's author key → append
-    R-->>B: content-free wake push  ("something changed; check feeds")
+    Note over R,B: delivery is poll-based (no push in the built system — see §6)
     B->>R: GET /feed/<A→B>?since=seq   (read-cap)
     R-->>B: entry(s)
-    Note over B: verify + decrypt with K; fetch + decrypt media from R2
-    B->>R: ACK
-    Note over R: destroy delivered entry + R2 blob (or TTL)
+    Note over B: verify + decrypt with K; fetch + decrypt media from R2; persist locally first
+    B->>R: ACK entries + DELETE media   (destroy-after-delivery)
+    Note over R: ack advances acked-watermark (rejects replay); a long TTL sweeps uncollected
 ```
 
-**Destroy-after-delivery** (already the product stance): once the recipient ACKs — or a short TTL after first fetch — the Worker deletes the entry and any R2 blob. The client keeps its own library; the relay keeps nothing it doesn't need _in flight_. This both minimizes data-at-rest and keeps storage inside the free tier.
+**Destroy-after-delivery** (the product stance): the recipient persists its local copy, then ACKs — the Worker deletes the entry, the client deletes the R2 blob, and a long in-object TTL sweeps anything never collected. The client keeps its own library; the relay keeps nothing it doesn't need _in flight_. This both minimizes data-at-rest and keeps storage inside the free tier.
 
 **Media vs text.** Text fits inline in the (encrypted) entry and never needs R2. Audio/video are encrypted, stored as an R2 object, and referenced by an entry that carries the object key _and_ the media decryption key — and since the entry is itself encrypted under `K`, that media key never reaches the relay in the clear.
 
@@ -137,7 +137,7 @@ Cloudflare free-tier limits that bind the design (verified June 2026; confirm be
 **The binding constraint is Workers requests, and polling drives it.** A device polling every minute, 24/7, spends 1,440 requests/day → the free tier holds only **~69 always-on pollers**. The fix isn't a bigger quota, it's not polling in the background:
 
 - **poll only while the app is foregrounded** (people use a missive app in bursts, minutes/day);
-- **a content-free wake push** covers the background case and moves "tell me when there's news" _off_ Workers entirely.
+- **a content-free wake push** (the design for the background case — not yet built; today the app syncs only when foregrounded) would move "tell me when there's news" _off_ Workers entirely.
 
 With that, Workers requests ≈ _actual sends + actual fetches_, not continuous polling — and the free tier comfortably holds **hundreds** of low-traffic users.
 
@@ -162,7 +162,7 @@ The shared-RSS idea, then, goes _far_: a zero-knowledge relay, capability-secure
 ## 8. Open decisions
 
 - **Deferred deep-link across install** — carrying `#S` through an app-store install when the link is opened before the app exists is fiddly; may need a deferred-deep-link path or a "paste your link" fallback.
-- **ACK vs TTL** for destroy-after-delivery — explicit ACK is precise but adds a write; first-fetch + short TTL is simpler. Lean TTL.
+- **ACK vs TTL** for destroy-after-delivery — *resolved:* explicit ACK is the prompt path (the client acks only after persisting its local copy), with a long in-object TTL sweep as the backstop for entries never collected.
 - **Forward secrecy** — baseline ships without; revisit if the threat model rises.
 - **Multi-device / key loss** — now designed in §9. v1 has the free fallback (re-pair) implicitly; device-to-device transfer and user-custodied backup are the v2 upgrades.
 
