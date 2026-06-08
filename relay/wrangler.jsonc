@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gene-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-04-01",
+  "observability": { "enabled": true },
+
+  // One Durable Object per invite slot (pairing) and per feed (delivery).
+  "durable_objects": {
+    "bindings": [
+      { "name": "INVITE", "class_name": "InviteSlot" },
+      { "name": "FEED", "class_name": "FeedSlot" }
+    ]
+  },
+  // SQLite-backed DOs are the free-tier class.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["InviteSlot"] },
+    { "tag": "v2", "new_sqlite_classes": ["FeedSlot"] }
+  ],
+
+  // Media blobs — encrypted client-side, destroyed after delivery. R2 egress is
+  // free, which is what makes video affordable. Bound as MEDIA to match
+  // `env.MEDIA` in the Worker; tests use a Miniflare bucket (vitest.config.ts).
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "gene-media" }
+  ]
+}
