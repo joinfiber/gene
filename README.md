@@ -67,7 +67,7 @@ The client records at full resolution, decodes the audio natively, finds the spe
 
 Strip the camera and the auto-edit away and what's left is general: *selectively disclose content to a chosen subset of a trust graph, end-to-end, where the operator learns nothing, on cheap infra.* The only video-specific thing in the transport is one record — generalize it and the floor carries anything.
 
-gene deliberately sits at the **privacy ceiling**: the most private, least convenient configuration this architecture allows (accountless, no cloud, re-pair on loss). That's the point of it — a high-water mark to build *down* from. A Marco-Polo clone with logins, cloud backup, and long-term storage is a perfectly good thing to build here; it just trades some privacy for reach and sits lower on the wall. The primitive **bounds** how private anything on top can be — and improving the primitive (forward secrecy, metadata resistance) raises that bound for everyone above it. The trust spectrum, a worked non-messaging example, and the whole "ceiling" model are in **[PRIMITIVE.md](PRIMITIVE.md)**.
+gene deliberately sits at the **privacy ceiling**: the most private, least convenient configuration this architecture allows (accountless, no cloud, re-pair on loss). That's the point of it — a high-water mark to build *down* from. A Marco-Polo clone with logins, cloud backup, and long-term storage is a perfectly good thing to build here; it just trades some privacy for reach and sits lower on the wall. The primitive **bounds** how private anything on top can be — and improving the primitive (forward secrecy, metadata resistance) raises that bound for everyone above it. The trust spectrum, a worked non-messaging example, and the whole "ceiling" model are in **[PRIMITIVE.md](PRIMITIVE.md)**; a prioritized, code-pointered backlog for actually picking it up is in **[VISION.md](VISION.md)**.
 
 ## Tests
 
@@ -79,7 +79,7 @@ cd relay && npm test                            # TypeScript: the relay in the r
 
 ## Docs
 
-[README](README.md) (here) → [ARCHITECTURE.md](ARCHITECTURE.md) (how it's built) → [SECURITY.md](SECURITY.md) (is it safe — verifiably) → [BACKEND.md](BACKEND.md) (the full design) → [PRIMITIVE.md](PRIMITIVE.md) (building on it) → [relay/README.md](relay/README.md) (the wire contract). [CLAUDE.md](CLAUDE.md) orients an AI assistant exploring the repo.
+[README](README.md) (here) → [ARCHITECTURE.md](ARCHITECTURE.md) (how it's built) → [SECURITY.md](SECURITY.md) (is it safe — verifiably) → [BACKEND.md](BACKEND.md) (the full design) → [PRIMITIVE.md](PRIMITIVE.md) (building on it) → [VISION.md](VISION.md) (what to build next — a contributor's map) → [relay/README.md](relay/README.md) (the wire contract). [CLAUDE.md](CLAUDE.md) orients an AI assistant exploring the repo.
 
 ## Status
 

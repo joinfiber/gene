@@ -27,6 +27,7 @@ Note: the working folder is `C:\dev2\roger` and the Android package is `dev.gene
 - **[SECURITY.md](SECURITY.md)** — the threat model, code-pointered. Read this before answering any "is it secure / can Cloudflare see X" question.
 - **[BACKEND.md](BACKEND.md)** — the full pairing + delivery + E2EE design and rationale.
 - **[PRIMITIVE.md](PRIMITIVE.md)** — gene as a reusable primitive: the primitive/app seam, the trust spectrum, and building other apps (incl. non-messaging) on its core.
+- **[VISION.md](VISION.md)** — the contributor's map: the deferrals turned into a prioritized, code-pointered backlog (harden the primitive · make it drop-in · build apps on it).
 - **[relay/README.md](relay/README.md)** — the relay's exact HTTP contract.
 
 ## Repo map
