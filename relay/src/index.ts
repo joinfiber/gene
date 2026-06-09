@@ -33,18 +33,17 @@ function tryFromB64(text: string): Uint8Array | undefined {
   }
 }
 
-/** Parse a JSON request body, returning `undefined` on malformed JSON. */
-async function readJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    return undefined;
-  }
-}
-
 // The sealed handshake blobs are tiny (a few hundred bytes); 8 KB is generous
 // headroom while still capping what a single unauthenticated request can buffer.
 const INVITE_MAX_BYTES = 8 * 1024;
+
+// A feed entry's JSON wraps a base64 signature plus the sealed ciphertext — for
+// these missives a few hundred bytes. 64 KB is generous headroom while staying
+// well under the Durable Object's 128 KB per-value storage limit, so an oversized
+// entry is a clean 413 rather than a 500 from the storage layer, and one
+// unauthenticated append can't buffer an arbitrary amount. Acks are tinier still;
+// the same cap covers them trivially.
+const FEED_JSON_MAX_BYTES = 64 * 1024;
 
 /**
  * Buffer a request body, refusing anything larger than [max] bytes. Checks the
@@ -61,6 +60,23 @@ async function readCappedBody(
   const body = await request.arrayBuffer();
   if (body.byteLength > max) return "too_large";
   return body;
+}
+
+/**
+ * Buffer, size-cap, and parse a JSON body. Returns `"too_large"` to signal a
+ * 413, or `undefined` for malformed JSON (so callers validate shape uniformly).
+ */
+async function readCappedJson(
+  request: Request,
+  max: number,
+): Promise<unknown | "too_large"> {
+  const body = await readCappedBody(request, max);
+  if (body === "too_large") return "too_large";
+  try {
+    return JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    return undefined;
+  }
 }
 
 export default {
@@ -177,7 +193,8 @@ async function handleFeed(
       });
     }
   } else if (action === "entry" && request.method === "POST") {
-    const body = await readJson(request);
+    const body = await readCappedJson(request, FEED_JSON_MAX_BYTES);
+    if (body === "too_large") return json({ error: "too_large" }, 413);
     if (
       typeof body !== "object" ||
       body === null ||
@@ -198,7 +215,8 @@ async function handleFeed(
     if (result === "duplicate") return json({ error: "duplicate_seq" }, 409);
     return json({ ok: true }, 201);
   } else if (action === "ack" && request.method === "POST") {
-    const body = await readJson(request);
+    const body = await readCappedJson(request, FEED_JSON_MAX_BYTES);
+    if (body === "too_large") return json({ error: "too_large" }, 413);
     if (
       typeof body !== "object" ||
       body === null ||

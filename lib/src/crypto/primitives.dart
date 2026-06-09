@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
@@ -20,6 +21,12 @@ class Crypto {
 
   static List<int> randomBytes(int length) =>
       List<int>.generate(length, (_) => _random.nextInt(256));
+
+  /// A URL-safe, unpadded random id with [bytes] bytes of entropy — the one
+  /// source for the unguessable ids gene addresses by (invite slots, feeds,
+  /// media blobs). 16 bytes = 128 bits, the capability strength feeds rely on.
+  static String randomId([int bytes = 16]) =>
+      base64Url.encode(randomBytes(bytes)).replaceAll('=', '');
 
   static Future<SimpleKeyPair> newSigningKey() => _ed25519.newKeyPair();
   static Future<SimpleKeyPair> newAgreementKey() => _x25519.newKeyPair();

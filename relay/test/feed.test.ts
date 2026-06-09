@@ -353,4 +353,20 @@ describe("feeds", () => {
     });
     expect(ack.status).toBe(404);
   });
+
+  it("rejects an oversized feed entry body as too_large (413)", async () => {
+    const { publicKey } = await makeAuthor();
+    await SELF.fetch(`${base}/feed/bigentry`, { method: "PUT", body: publicKey });
+
+    // A JSON body far over the 64 KB feed cap must be refused before it can be
+    // buffered/stored — a clean 413, not an unbounded read or a 500 from the
+    // Durable Object's per-value storage limit.
+    const huge = "A".repeat(200 * 1024);
+    const post = await SELF.fetch(`${base}/feed/bigentry/entry`, {
+      method: "POST",
+      body: JSON.stringify({ seq: 1, sig: huge, ct: huge }),
+    });
+    expect(post.status).toBe(413);
+    expect(((await post.json()) as { error: string }).error).toBe("too_large");
+  });
 });

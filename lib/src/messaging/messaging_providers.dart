@@ -74,7 +74,27 @@ class Conversation {
 
   final Ref _ref;
 
+  /// Sends are serialized through this chain. Two composes in flight at once
+  /// would otherwise both read the same outbound seq, and the relay would reject
+  /// the second as a duplicate — silently dropping that missive. Chaining makes
+  /// each send read-and-advance the seq atomically with respect to the others.
+  Future<void> _sends = Future.value();
+
   Future<void> send(
+    Contact contact, {
+    required String videoPath,
+    required int durationMs,
+  }) {
+    final result = _sends.then(
+      (_) => _send(contact, videoPath: videoPath, durationMs: durationMs),
+    );
+    // Keep the chain alive even if one send throws, so a single failure doesn't
+    // wedge every later send.
+    _sends = result.catchError((Object _) {});
+    return result;
+  }
+
+  Future<void> _send(
     Contact contact, {
     required String videoPath,
     required int durationMs,
@@ -95,6 +115,15 @@ class Conversation {
       live.outboundFeedId,
       (c) => c.outboundSeq > seq ? c : c.copyWith(outboundSeq: seq + 1),
     );
+    // The missive is sealed and uploaded end-to-end; the local plaintext copy of
+    // what we just sent has served its purpose. Drop it — best-effort, since a
+    // lingering temp file is harmless, but leaving decrypted video on disk is
+    // exactly the kind of thing this app shouldn't do.
+    try {
+      await File(videoPath).delete();
+    } catch (_) {
+      // best-effort cleanup
+    }
   }
 
   /// Pull new missives for [contact]; returns how many arrived.

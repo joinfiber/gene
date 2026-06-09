@@ -35,11 +35,11 @@ class PairingService {
     RelayTransport relay, {
     required String linkBase,
   }) async {
-    final inviteId = _randomId();
+    final inviteId = Crypto.randomId();
     final linkSecret = Crypto.randomBytes(32);
     final ephemeral = await Crypto.newAgreementKey(); // per-invite X25519
     final ephemeralPublic = await Crypto.publicKeyBytes(ephemeral);
-    final outboundFeedId = _randomId();
+    final outboundFeedId = Crypto.randomId();
     final writeKey = await Crypto.newSigningKey(); // per-feed Ed25519
 
     final signature = await Crypto.sign(
@@ -111,7 +111,7 @@ class PairingService {
     final ephemeralPublic = await Crypto.publicKeyBytes(ephemeral);
     final z = await Crypto.sharedSecret(ephemeral, inviterEphemeral);
 
-    final outboundFeedId = _randomId();
+    final outboundFeedId = Crypto.randomId();
     final writeKey = await Crypto.newSigningKey();
 
     final signature = await Crypto.sign(
@@ -157,9 +157,6 @@ class PairingService {
       inboundFeedId: inboundFeedId,
     );
   }
-
-  static String _randomId() =>
-      base64Url.encode(Crypto.randomBytes(16)).replaceAll('=', '');
 }
 
 /// The inviter's side of an in-flight pairing: holds the secrets needed to

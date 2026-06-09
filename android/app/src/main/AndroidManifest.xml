@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- gene talks to the relay over HTTPS; the app does nothing without it. This
+         MUST live in the main manifest, not only debug/profile, or release builds
+         merge no INTERNET permission and every relay call fails. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-feature android:name="android.hardware.camera.any"/>

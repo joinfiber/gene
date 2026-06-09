@@ -44,7 +44,7 @@ class MessagingService {
     required int durationMs,
   }) async {
     final mediaKey = Crypto.randomBytes(32);
-    final mediaId = _randomId();
+    final mediaId = Crypto.randomId();
     var uploaded = false;
     try {
       final clear = await File(videoPath).readAsBytes();
@@ -170,7 +170,4 @@ class MessagingService {
       }
     }
   }
-
-  static String _randomId() =>
-      base64Url.encode(Crypto.randomBytes(16)).replaceAll('=', '');
 }

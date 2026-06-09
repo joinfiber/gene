@@ -8,7 +8,9 @@ import 'package:gene/src/messaging/message_store.dart';
 import 'package:gene/src/messaging/messaging_providers.dart';
 import 'package:gene/src/messaging/messaging_service.dart';
 import 'package:gene/src/messaging/models.dart';
+import 'package:gene/src/pairing/contact_store.dart';
 import 'package:gene/src/pairing/models.dart';
+import 'package:gene/src/pairing/pairing_providers.dart';
 import 'package:gene/src/pairing/pairing_service.dart';
 import 'package:gene/src/pairing/relay_transport.dart';
 
@@ -27,6 +29,27 @@ Future<({Contact alice, Contact bob, InMemoryRelay relay})> _pair() async {
 
 File _fakeVideo(Directory dir, List<int> bytes) =>
     File('${dir.path}/take.mp4')..writeAsBytesSync(bytes);
+
+File _fakeVideoNamed(Directory dir, String name, List<int> bytes) =>
+    File('${dir.path}/$name')..writeAsBytesSync(bytes);
+
+/// An in-memory [ContactStore] for tests — overrides load/save so the contacts
+/// provider works without the platform secure-storage channel.
+class _MemContactStore extends ContactStore {
+  _MemContactStore([List<Contact>? seed]) : _contacts = [...?seed];
+
+  final List<Contact> _contacts;
+
+  @override
+  Future<List<Contact>> load() async => List.of(_contacts);
+
+  @override
+  Future<void> save(List<Contact> contacts) async {
+    _contacts
+      ..clear()
+      ..addAll(contacts);
+  }
+}
 
 void main() {
   test('a missive sent by Alice is received and decrypted by Bob, then '
@@ -160,6 +183,57 @@ void main() {
     await lib.ingest([m]);
     await lib.ingest([m]); // same (feed, seq) again
     expect(container.read(libraryProvider).asData?.value, hasLength(1));
+  });
+
+  test('concurrent sends get distinct seqs — neither missive is dropped',
+      () async {
+    final p = await _pair();
+    final tmp = await Directory.systemTemp.createTemp('gene_concurrent');
+    final a = _fakeVideoNamed(tmp, 'a.mp4', List<int>.filled(300, 1));
+    final b = _fakeVideoNamed(tmp, 'b.mp4', List<int>.filled(300, 2));
+
+    final container = ProviderContainer(overrides: [
+      relayTransportProvider.overrideWithValue(p.relay),
+      contactStoreProvider.overrideWithValue(_MemContactStore([p.alice])),
+    ]);
+    addTearDown(container.dispose);
+    addTearDown(() => tmp.deleteSync(recursive: true));
+
+    await container.read(contactsProvider.future); // load the seeded contact
+    final conversation = container.read(conversationProvider);
+
+    // Fire two sends at once. Without serialization both read outboundSeq=1, and
+    // the relay rejects the second as a duplicate — losing that missive.
+    await Future.wait([
+      conversation.send(p.alice, videoPath: a.path, durationMs: 100),
+      conversation.send(p.alice, videoPath: b.path, durationMs: 200),
+    ]);
+
+    final inbox = await Directory.systemTemp.createTemp('gene_concurrent_in');
+    addTearDown(() => inbox.deleteSync(recursive: true));
+    final r = await MessagingService(p.relay).fetchNew(p.bob, mediaDir: inbox);
+    expect(r.received, hasLength(2), reason: 'no missive was dropped');
+    expect(r.received.map((m) => m.seq).toSet(), {1, 2});
+
+    // The contact's outbound seq advanced past both sends.
+    final live = container
+        .read(contactsProvider)
+        .asData!
+        .value
+        .firstWhere((c) => c.outboundFeedId == p.alice.outboundFeedId);
+    expect(live.outboundSeq, 3);
+
+    // The local plaintext copies were cleaned up after sending.
+    expect(a.existsSync(), isFalse);
+    expect(b.existsSync(), isFalse);
+  });
+
+  test('Crypto.randomId is url-safe, unpadded, and collision-free', () {
+    final id = Crypto.randomId();
+    expect(id, matches(RegExp(r'^[A-Za-z0-9_-]+$')));
+    expect(id, isNot(contains('=')));
+    final ids = {for (var i = 0; i < 1000; i++) Crypto.randomId()};
+    expect(ids, hasLength(1000), reason: '128-bit ids do not collide');
   });
 
   test('signedMessage is big-endian seq ‖ ciphertext', () {
