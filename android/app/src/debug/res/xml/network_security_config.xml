@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only network policy. Modern targetSdk disables cleartext HTTP by default,
+  which would block the documented local-dev relay flow (`npm run dev` +
+  `adb reverse tcp:8787`, default GENE_RELAY_URL=http://localhost:8787). Permit
+  cleartext ONLY to localhost and the emulator's host alias (10.0.2.2). Release
+  builds don't reference this file, so they remain HTTPS-only with no cleartext
+  allowance.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/widgets.dart';
@@ -95,6 +96,21 @@ class RecorderController extends Notifier<RecorderState> {
   /// Re-initialize after a permission denial or camera error.
   Future<void> retry() => _initCamera();
 
+  /// Drop the current take after it has been sent (or abandoned): delete its file
+  /// best-effort so the decrypted recording doesn't linger, and clear the path so
+  /// the recorder's stale play/tighten actions disappear. Idempotent.
+  Future<void> clearTake() async {
+    final path = state.lastRecordingPath;
+    _publish(RecorderState(status: state.status));
+    if (path != null) {
+      try {
+        await File(path).delete();
+      } catch (_) {
+        // best-effort
+      }
+    }
+  }
+
   /// Start or stop recording. On a recording error it restores a usable state
   /// and rethrows, so the UI can surface a transient message.
   Future<void> toggleRecording() async {
@@ -112,11 +128,18 @@ class RecorderController extends Notifier<RecorderState> {
           lastRecordingPath: file.path,
         ));
       } else {
+        final priorTake = state.lastRecordingPath;
         await controller.startVideoRecording();
-        _publish(state.copyWith(
-          status: RecorderStatus.recording,
-          elapsed: Duration.zero,
-        ));
+        // Fresh recording state (drops the prior take's path), then delete that
+        // prior take's file so abandoned, unsent recordings don't pile up on disk.
+        _publish(const RecorderState(status: RecorderStatus.recording));
+        if (priorTake != null) {
+          try {
+            await File(priorTake).delete();
+          } catch (_) {
+            // best-effort
+          }
+        }
         _timer = Timer.periodic(const Duration(seconds: 1), (_) {
           if (_disposed) return;
           _publish(state.copyWith(
@@ -166,6 +189,7 @@ class RecorderController extends Notifier<RecorderState> {
   }
 
   void _disposeResources() {
+    final takePath = state.lastRecordingPath;
     _disposed = true;
     _timer?.cancel();
     _lifecycle?.dispose();
@@ -173,11 +197,12 @@ class RecorderController extends Notifier<RecorderState> {
     _camera = null;
     // onDispose is synchronous, so finalize as a best-effort fire-and-forget:
     // stop any in-flight recording (so the file is finalized, not corrupt),
-    // release the camera, and drop the wake-lock.
-    unawaited(_finalize(controller));
+    // release the camera, drop the wake-lock, and delete any unsent take so the
+    // decrypted recording doesn't outlive the session.
+    unawaited(_finalize(controller, takePath));
   }
 
-  Future<void> _finalize(CameraController? controller) async {
+  Future<void> _finalize(CameraController? controller, String? takePath) async {
     try {
       if (controller != null) {
         if (controller.value.isRecordingVideo) {
@@ -191,6 +216,13 @@ class RecorderController extends Notifier<RecorderState> {
       }
     } finally {
       await WakelockPlus.disable();
+      if (takePath != null) {
+        try {
+          await File(takePath).delete();
+        } catch (_) {
+          // best-effort
+        }
+      }
     }
   }
 }

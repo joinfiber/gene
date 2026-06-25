@@ -25,10 +25,22 @@ class EditorApiImpl(private val activity: Activity) : EditorApi {
     ) {
         worker.execute {
             val result = runCatching { AudioAnalyzer.detect(inputPath) }
-            // The Activity may have been torn down while we were decoding;
-            // runOnUiThread on a dead Activity would be wasted work or worse.
-            if (!activity.isDestroyed && !activity.isFinishing) {
-                activity.runOnUiThread { callback(result) }
+            // If the decode was cancelled on teardown (shutdownNow -> isInterrupted),
+            // re-assert the interrupt flag so the thread's status isn't silently
+            // cleared; the failure still flows back as an ordinary Result.
+            if (result.exceptionOrNull() is InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            // Always complete the Dart Future exactly once, so the awaiting
+            // TightenController never hangs with its busy state stuck. Delivery can
+            // throw if the engine is detaching during teardown, so guard it — a
+            // live Activity always gets its reply rather than a dropped callback.
+            activity.runOnUiThread {
+                try {
+                    callback(result)
+                } catch (_: Exception) {
+                    // Engine gone; the awaiting Dart side is being torn down too.
+                }
             }
         }
     }

@@ -41,13 +41,16 @@ class MessageStore {
   Future<Directory> _mediaDir() async =>
       Directory('${(await directory()).path}/$_mediaSubdir');
 
-  /// Load the library, preferring the committed index, then a temp left by an
-  /// interrupted atomic write, then a reconstruction from the media on disk.
-  /// Never throws: a file that won't parse is quarantined and the next source is
-  /// tried, so a corrupt index degrades to "rebuild from disk", not "library
-  /// gone".
+  /// Load the library, preferring a temp left by an interrupted atomic write
+  /// (by construction the most-recent flushed state), then the committed index,
+  /// then a reconstruction from the media on disk. Never throws: a file that
+  /// won't parse is quarantined and the next source is tried, so a corrupt index
+  /// degrades to "rebuild from disk", not "library gone".
   Future<List<ReceivedMissive>> load() async {
-    for (final file in [await _file(), await _tmpFile()]) {
+    // Temp first: if a crash landed between flush and rename, the temp holds the
+    // newer state and the committed file is the previous good copy. After a clean
+    // save the temp is gone, so this is a no-op in the normal case.
+    for (final file in [await _tmpFile(), await _file()]) {
       if (!file.existsSync()) continue;
       try {
         return _decode(await file.readAsString());
@@ -101,6 +104,10 @@ class MessageStore {
   /// is the trailing digits after the final '-', so a feed id that itself
   /// contains '-' (base64url) is parsed correctly. Duration is unknown (shown as
   /// 0) and the file's mtime stands in for the receive time.
+  ///
+  /// Invariant for any future missive-delete feature: delete the media FILE too
+  /// (or write a tombstone), or a later rebuild here will resurrect a missive the
+  /// user deleted — the on-disk file is the source of truth on this path.
   Future<List<ReceivedMissive>> _rebuildFromDisk() async {
     final dir = await _mediaDir();
     if (!dir.existsSync()) return [];

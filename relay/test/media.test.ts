@@ -15,10 +15,12 @@ describe("media", () => {
 
     const get = await SELF.fetch(`${base}/media/m1`);
     expect(get.status).toBe(200);
+    expect(get.headers.get("cache-control")).toBe("no-store");
     expect(new Uint8Array(await get.arrayBuffer())).toEqual(blob);
 
     const del = await SELF.fetch(`${base}/media/m1`, { method: "DELETE" });
     expect(del.status).toBe(204);
+    expect(del.headers.get("cache-control")).toBe("no-store");
 
     const gone = await SELF.fetch(`${base}/media/m1`);
     expect(gone.status).toBe(404);
@@ -52,8 +54,17 @@ describe("media", () => {
     expect(new Uint8Array(await get.arrayBuffer())).toEqual(first);
   });
 
-  it("dynamic responses are no-store", async () => {
-    const get = await SELF.fetch(`${base}/media/missing`); // 404 JSON
+  it("dynamic responses are no-store (404 and the delivered blob)", async () => {
+    const missing = await SELF.fetch(`${base}/media/missing`); // 404 JSON
+    expect(missing.headers.get("cache-control")).toBe("no-store");
+
+    await SELF.fetch(`${base}/media/cacheproof`, {
+      method: "PUT",
+      body: new Uint8Array([7, 7, 7]),
+    });
+    const get = await SELF.fetch(`${base}/media/cacheproof`);
+    expect(get.status).toBe(200);
+    // The actual E2EE payload response must also be uncacheable.
     expect(get.headers.get("cache-control")).toBe("no-store");
   });
 });

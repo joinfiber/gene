@@ -55,7 +55,7 @@ relay/                                   the zero-knowledge relay (TypeScript; W
 2. **`K` and identity private keys never leave the device.** Only public keys and sealed blobs cross the wire.
 3. **Per-feed keys, never the identity key, sign feed writes** (un-linkability — BACKEND.md §5).
 4. **The link secret `S` lives only in the URL `#fragment`.** Don't move it into a path/query or send it to the server.
-5. **Crypto goes through `Crypto`** (`lib/src/crypto/primitives.dart`) and the shared formats in `lib/src/messaging/message_crypto.dart` — which must stay byte-compatible with `relay/src/codec.ts` + `crypto.ts`.
+5. **Crypto goes through `Crypto`** (`lib/src/crypto/primitives.dart`). Of `lib/src/messaging/message_crypto.dart`, only the signed-entry bytes (`signedMessage`) cross the boundary and must stay byte-compatible with `relay/src/codec.ts`; the per-message subkey derivation and sealing are **client-only** — the relay (`crypto.ts`) merely verifies Ed25519 and never derives a subkey or opens anything.
 
 ## Build · run · test
 

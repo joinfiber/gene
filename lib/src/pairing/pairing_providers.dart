@@ -48,6 +48,14 @@ class ContactsController extends AsyncNotifier<List<Contact>> {
   Future<void> add(Contact contact) =>
       _commit([...?state.asData?.value, contact]);
 
+  /// Remove a contact (matched by its stable outbound feed id), purging its
+  /// on-device crown-jewel secrets — the conversation key and the per-feed write
+  /// seed — from secure storage along with it.
+  Future<void> remove(Contact contact) => _commit([
+        for (final c in state.asData?.value ?? const <Contact>[])
+          if (c.outboundFeedId != contact.outboundFeedId) c,
+      ]);
+
   Future<void> rename(Contact contact, String name) =>
       replace(contact.withName(name));
 

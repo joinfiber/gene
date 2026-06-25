@@ -34,6 +34,13 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            // R8/minify is intentionally OFF: the reference app ships native code
+            // (AudioAnalyzer/VideoSplicer) + media3 + Pigeon, whose reflective paths
+            // can break under shrinking without verified keep rules. Before any real
+            // distribution, enable these with a proguard-rules.pro carrying media3 +
+            // GeneratedPluginRegistrant keeps, verified on-device.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }

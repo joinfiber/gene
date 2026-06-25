@@ -27,6 +27,8 @@ internal object AudioAnalyzer {
     private const val EDGE_SLACK_S = 0.06
     // Below this width a generated keep/cut span is noise; drop it (seconds).
     private const val SPAN_EPS_S = 0.01
+    // A leading/trailing edge cut shorter than this isn't worth making (seconds).
+    private const val MIN_EDGE_CUT_S = 0.05
 
     // Decode-loop bounds. A well-formed track terminates long before either of
     // these. The iteration cap is an absolute backstop; the no-progress deadline
@@ -132,6 +134,10 @@ internal object AudioAnalyzer {
                 }
                 val outIndex = codec.dequeueOutputBuffer(info, timeout)
                 if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    // A format change is evidence the decoder is alive: refresh the
+                    // no-progress deadline so a slow pipeline warm-up before the
+                    // first real output isn't mistaken for a stall.
+                    lastProgressAt = System.nanoTime()
                     val out = codec.outputFormat
                     channels = out.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                     sampleRate = out.getInteger(MediaFormat.KEY_SAMPLE_RATE)
@@ -349,11 +355,11 @@ internal object AudioAnalyzer {
                 }
                 atStart -> {
                     val e = Math.max(0.0, s.b - EDGE_S)
-                    if (e > 0.05) cuts.add(Span(0.0, e))
+                    if (e > MIN_EDGE_CUT_S) cuts.add(Span(0.0, e))
                 }
                 atEnd -> {
                     val start = Math.min(durSec, s.a + EDGE_S)
-                    if (durSec - start > 0.05) cuts.add(Span(start, durSec))
+                    if (durSec - start > MIN_EDGE_CUT_S) cuts.add(Span(start, durSec))
                 }
                 s.b - s.a > MIN_PAUSE_S -> {
                     val excess = (s.b - s.a) - COLLAPSE_TO_S

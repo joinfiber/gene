@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gene/src/pairing/models.dart';
 import 'package:gene/src/pairing/pairing_service.dart';
@@ -95,5 +97,25 @@ void main() {
         throwsA(isA<PairingException>()),
       );
     }
+  });
+
+  test('a well-formed link with the wrong secret fails cleanly (open failure)',
+      () async {
+    final relay = InMemoryRelay();
+    final alice = await LocalIdentity.generate();
+    final bob = await LocalIdentity.generate();
+    final pending = await PairingService.mintInvite(alice, relay,
+        linkBase: 'https://relay.test/i/');
+
+    // Same (valid) invite id, but a different 32-byte fragment secret, so the
+    // seal key is wrong and the sealed payload can't be opened. This exercises
+    // the post-fetch crypto-failure branch, not just the pre-network link parse.
+    final wrongSecret = base64Url.encode(List<int>.filled(32, 7));
+    final tampered = pending.link.replaceFirst(RegExp(r'#.*$'), '#$wrongSecret');
+
+    await expectLater(
+      PairingService.redeemInvite(bob, tampered, relay),
+      throwsA(isA<PairingException>()),
+    );
   });
 }

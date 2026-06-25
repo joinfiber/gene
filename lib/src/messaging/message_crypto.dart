@@ -13,7 +13,7 @@ import 'package:gene/src/crypto/primitives.dart';
 /// signature.
 List<int> signedMessage(int seq, List<int> ciphertext) {
   final message = Uint8List(8 + ciphertext.length);
-  ByteData.view(message.buffer).setUint64(0, seq, Endian.big);
+  _writeU64be(ByteData.view(message.buffer), 0, seq);
   message.setRange(8, message.length, ciphertext);
   return message;
 }
@@ -36,6 +36,15 @@ Future<List<int>> messageSubkey(
 
 List<int> _u64be(int value) {
   final out = Uint8List(8);
-  ByteData.view(out.buffer).setUint64(0, value, Endian.big);
+  _writeU64be(ByteData.view(out.buffer), 0, value);
   return out;
+}
+
+/// Write [value] as a big-endian unsigned 64-bit integer at [offset], using two
+/// 32-bit writes rather than `setUint64`. The bytes are identical, but this also
+/// works on the dart2js/web backend, where 64-bit `ByteData` ops are unsupported
+/// — so the portable core stays portable if it is ever compiled for web.
+void _writeU64be(ByteData view, int offset, int value) {
+  view.setUint32(offset, (value ~/ 0x100000000) & 0xFFFFFFFF, Endian.big);
+  view.setUint32(offset + 4, value & 0xFFFFFFFF, Endian.big);
 }

@@ -56,6 +56,15 @@ void main() {
     // The library is recovered from disk rather than silently lost.
     expect(loaded.map((m) => '${m.inboundFeedId}:${m.seq}'),
         ['feedA:1', 'feedA:2']);
+    // Degraded-but-safe metadata contract: duration is unknown (0) and the
+    // receive time falls back to the media file's mtime.
+    final byKey = {for (final m in loaded) '${m.inboundFeedId}:${m.seq}': m};
+    expect(byKey['feedA:1']!.durationMs, 0);
+    expect(
+      byKey['feedA:1']!.receivedAtMs,
+      File('${mediaDir().path}/feedA-1.mp4').statSync().modified
+          .millisecondsSinceEpoch,
+    );
     // The corrupt file was quarantined, not left to be re-read.
     expect(indexFile().existsSync(), isFalse);
     expect(File('${indexFile().path}.corrupt').existsSync(), isTrue);

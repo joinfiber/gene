@@ -1,6 +1,7 @@
 package dev.gene.editor
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
@@ -116,12 +117,18 @@ internal class VideoSplicer(private val context: Context) {
         }
 
         val baseItem = MediaItem.fromUri(Uri.fromFile(File(inputPath)))
+        // Keep-range ends are computed from the AUDIO track; clamp them to the
+        // container duration so a slightly-longer audio track can't push the final
+        // clip past the video (a cross-track mismatch). 0 -> defer to Media3's clamp.
+        val videoDurationMs = durationMs(inputPath)
         val editedItems = spans.map { span ->
+            val endMs =
+                if (videoDurationMs > 0) Math.min(span.endMs, videoDurationMs) else span.endMs
             val clipped = baseItem.buildUpon()
                 .setClippingConfiguration(
                     MediaItem.ClippingConfiguration.Builder()
                         .setStartPositionMs(span.startMs)
-                        .setEndPositionMs(span.endMs)
+                        .setEndPositionMs(endMs)
                         .build(),
                 )
                 .build()
@@ -152,5 +159,23 @@ internal class VideoSplicer(private val context: Context) {
     fun cancel() {
         current?.cancel()
         current = null
+    }
+
+    /** The container's duration in milliseconds via metadata, or 0 if unknown. */
+    private fun durationMs(path: String): Long {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(path)
+            retriever
+                .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+        } catch (_: Exception) {
+            0L
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
+        }
     }
 }

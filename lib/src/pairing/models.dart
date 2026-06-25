@@ -79,13 +79,19 @@ class Contact {
       ...keys[0],
       ...keys[1],
     ]);
+    // Treat the 256-bit digest as one big integer and peel off 5-digit groups by
+    // repeated mod/div. This consumes the whole digest with bias (2^256 mod
+    // 100000^8) that is astronomically small, instead of a per-4-byte
+    // `value % 100000` that leaves a ~1.6e-5 modulo bias in every group.
+    var acc = BigInt.zero;
+    for (final byte in material) {
+      acc = (acc << 8) | BigInt.from(byte);
+    }
+    final mod = BigInt.from(100000);
     final groups = <String>[];
     for (var i = 0; i < 8; i++) {
-      final value = (material[i * 4] << 24) |
-          (material[i * 4 + 1] << 16) |
-          (material[i * 4 + 2] << 8) |
-          material[i * 4 + 3];
-      groups.add((value % 100000).toString().padLeft(5, '0'));
+      groups.add((acc % mod).toInt().toString().padLeft(5, '0'));
+      acc = acc ~/ mod;
     }
     return groups.join(' ');
   }

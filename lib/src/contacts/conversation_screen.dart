@@ -71,7 +71,13 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       final me = await ref.read(identityProvider.future);
       number = await _contact.safetyNumber(me.publicKey);
     } catch (_) {
-      return; // identity unavailable — nothing to show
+      // A security affordance shouldn't fail silently — tell the user.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not load the safety number — try again.'),
+        ));
+      }
+      return;
     }
     if (!mounted) return;
     await showDialog<void>(

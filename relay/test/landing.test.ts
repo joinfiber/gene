@@ -20,9 +20,12 @@ describe("invite landing page", () => {
     expect(await res.text()).not.toContain("supersecret");
   });
 
-  it("is GET-only", async () => {
+  it("is GET-only (405 on other methods)", async () => {
     const res = await SELF.fetch(`${base}/i/abc123`, { method: "POST" });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(405);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      "method_not_allowed",
+    );
   });
 
   it("is cacheable and hardened: long-lived cache, ETag, CSP, no-referrer", async () => {

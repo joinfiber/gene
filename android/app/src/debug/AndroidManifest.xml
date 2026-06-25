@@ -4,4 +4,10 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Debug-only: allow cleartext to localhost / the emulator host so the
+         local-dev relay (http://localhost:8787 via adb reverse) works on a modern
+         targetSdk. Merges its networkSecurityConfig onto the main <application>;
+         release builds don't include it and stay HTTPS-only. -->
+    <application
+        android:networkSecurityConfig="@xml/network_security_config" />
 </manifest>

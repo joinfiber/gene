@@ -76,8 +76,12 @@ class MessagingService {
           // best-effort; the R2 lifecycle backstop catches the rest
         }
       }
-      // The entry is already on the feed (a retried send) — treat as delivered.
-      if (e is DuplicateSeqException) return;
+      // A retried send whose original actually landed: the entry is either still
+      // pending (DuplicateSeq) or already delivered-and-acked past the watermark
+      // (StaleSeq). Both mean "this seq was delivered" — treat as success so the
+      // caller advances past it, rather than rethrowing StaleSeq forever and
+      // permanently wedging the feed at a seq the relay will never accept again.
+      if (e is DuplicateSeqException || e is StaleSeqException) return;
       rethrow;
     }
   }

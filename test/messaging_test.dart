@@ -137,26 +137,87 @@ void main() {
     inbox.deleteSync(recursive: true);
   });
 
-  test('fetchNew stops at an entry whose media is gone (does not burn the seq)',
-      () async {
+  test('fetchNew stops at the first entry whose media is gone — it does not '
+      'skip the gap to deliver a later one', () async {
     final p = await _pair();
     final service = MessagingService(p.relay);
     final tmp = await Directory.systemTemp.createTemp('gene_mm');
+
     await service.send(p.alice,
         seq: 1,
-        videoPath: _fakeVideo(tmp, List<int>.filled(500, 2)).path,
+        videoPath: _fakeVideoNamed(tmp, 'v1.mp4', List<int>.filled(400, 1)).path,
         durationMs: 100);
+    // Snapshot seq 1's media id before sending seq 2, so we can delete *only* it.
+    final firstBlobs = p.relay.mediaIds.toSet();
+    await service.send(p.alice,
+        seq: 2,
+        videoPath: _fakeVideoNamed(tmp, 'v2.mp4', List<int>.filled(400, 2)).path,
+        durationMs: 200);
 
-    // Simulate the blob being swept before the recipient pulled it.
-    for (final id in p.relay.mediaIds.toList()) {
+    // Seq 1's blob is swept; seq 2's is still present.
+    for (final id in firstBlobs) {
       await p.relay.deleteMedia(id);
     }
 
     final inbox = await Directory.systemTemp.createTemp('gene_mm_in');
     final r = await service.fetchNew(p.bob, mediaDir: inbox);
+    // Must stop at the seq-1 gap, NOT skip ahead to deliver seq 2.
     expect(r.received, isEmpty);
-    expect(r.cursor, 0,
-        reason: 'cursor must not advance past an undelivered entry');
+    expect(r.cursor, 0, reason: 'cursor must not advance past the gap');
+
+    tmp.deleteSync(recursive: true);
+    inbox.deleteSync(recursive: true);
+  });
+
+  test('a retried send of an already-delivered-and-acked seq is treated as '
+      'delivered, not a permanent wedge', () async {
+    final p = await _pair();
+    final service = MessagingService(p.relay);
+    final tmp = await Directory.systemTemp.createTemp('gene_stale');
+    final path = _fakeVideoNamed(tmp, 's.mp4', List<int>.filled(300, 5)).path;
+
+    // Alice sends seq 1; Bob receives and acks it, advancing the relay watermark.
+    await service.send(p.alice, seq: 1, videoPath: path, durationMs: 100);
+    final inbox = await Directory.systemTemp.createTemp('gene_stale_in');
+    final r = await service.fetchNew(p.bob, mediaDir: inbox);
+    await service.confirm(p.bob, upTo: r.cursor, mediaIds: r.mediaIds);
+
+    // A retried send at the now-acked seq 1 returns StaleSeq from the relay. It
+    // must be treated as "already delivered" (no throw), or the feed wedges
+    // forever at a seq the relay will never accept again.
+    await expectLater(
+      service.send(p.alice, seq: 1, videoPath: path, durationMs: 100),
+      completes,
+    );
+
+    tmp.deleteSync(recursive: true);
+    inbox.deleteSync(recursive: true);
+  });
+
+  test('the in-memory relay clamps the ack watermark — a later legit seq still '
+      'appends after an over-ack', () async {
+    final p = await _pair();
+    final service = MessagingService(p.relay);
+    final tmp = await Directory.systemTemp.createTemp('gene_clamp');
+
+    await service.send(p.alice,
+        seq: 1,
+        videoPath: _fakeVideoNamed(tmp, 'c1.mp4', const [1, 2, 3]).path,
+        durationMs: 1);
+    // A read-capability holder acks far past anything stored, trying to push the
+    // watermark to a huge value and brick the author.
+    await p.relay.ackEntries(p.alice.outboundFeedId, 1 << 50);
+    // The author's next legitimate seq must still be accepted (watermark clamped
+    // to the highest stored seq, 1 — not the raw upTo), and reach Bob.
+    await service.send(p.alice,
+        seq: 2,
+        videoPath: _fakeVideoNamed(tmp, 'c2.mp4', const [4, 5, 6]).path,
+        durationMs: 1);
+
+    final inbox = await Directory.systemTemp.createTemp('gene_clamp_in');
+    final r = await service.fetchNew(p.bob, mediaDir: inbox);
+    expect(r.received.map((m) => m.seq), [2],
+        reason: 'seq 2 delivered after the over-ack (watermark was clamped)');
 
     tmp.deleteSync(recursive: true);
     inbox.deleteSync(recursive: true);
@@ -232,8 +293,42 @@ void main() {
     final id = Crypto.randomId();
     expect(id, matches(RegExp(r'^[A-Za-z0-9_-]+$')));
     expect(id, isNot(contains('=')));
+    expect(id.length, 22,
+        reason: '16 bytes of entropy = 22 unpadded base64url chars');
     final ids = {for (var i = 0; i < 1000; i++) Crypto.randomId()};
     expect(ids, hasLength(1000), reason: '128-bit ids do not collide');
+  });
+
+  test('InMemoryRelay pins the feed author key write-once (no silent re-bind)',
+      () async {
+    final relay = InMemoryRelay();
+    final k1 = await Crypto.newSigningKey();
+    final k2 = await Crypto.newSigningKey();
+    await relay.createFeed('f', await Crypto.publicKeyBytes(k1));
+    await relay.createFeed('f', await Crypto.publicKeyBytes(k2)); // must no-op
+
+    const ct = [1, 2, 3];
+    // An entry signed by the ORIGINAL key still verifies (key was not re-bound).
+    await relay.appendEntry(
+      'f',
+      FeedEntry(
+        seq: 1,
+        signature: await Crypto.sign(signedMessage(1, ct), k1),
+        ciphertext: ct,
+      ),
+    );
+    // One signed by the second key must NOT verify (still bound to k1).
+    await expectLater(
+      relay.appendEntry(
+        'f',
+        FeedEntry(
+          seq: 2,
+          signature: await Crypto.sign(signedMessage(2, ct), k2),
+          ciphertext: ct,
+        ),
+      ),
+      throwsA(isA<StateError>()),
+    );
   });
 
   test('signedMessage is big-endian seq ‖ ciphertext', () {

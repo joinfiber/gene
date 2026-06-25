@@ -96,8 +96,9 @@ export default {
     // Human-facing landing page for a shared invite link (…/i/:id#secret). The
     // fragment-secret is never sent to the server, so this stays zero-knowledge;
     // the page just guides the recipient to paste the link into the app.
-    if (resource === "i" && id && request.method === "GET") {
-      return landingPage();
+    if (resource === "i" && id) {
+      if (request.method === "GET") return landingPage();
+      return json({ error: "method_not_allowed" }, 405);
     }
     return json({ error: "not_found" }, 404);
   },
@@ -136,7 +137,12 @@ async function handleInvite(
     }
     if (request.method === "GET") {
       const response = await slot.response();
-      return response ? bytes(response) : new Response(null, { status: 204 });
+      return response
+        ? bytes(response)
+        : new Response(null, {
+            status: 204,
+            headers: { "cache-control": "no-store" },
+          });
     }
   }
 
@@ -262,12 +268,18 @@ async function handleMedia(
       headers: {
         "content-type": "application/octet-stream",
         "content-length": String(object.size),
+        // The blob is opaque ciphertext, but it's per-request and ephemeral —
+        // never let an intermediary cache a delivered E2EE payload.
+        "cache-control": "no-store",
       },
     });
   }
   if (request.method === "DELETE") {
     await bucket.delete(id);
-    return new Response(null, { status: 204 });
+    return new Response(null, {
+      status: 204,
+      headers: { "cache-control": "no-store" },
+    });
   }
   return json({ error: "method_not_allowed" }, 405);
 }

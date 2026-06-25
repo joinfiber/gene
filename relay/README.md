@@ -96,6 +96,8 @@ Media is live: the `MEDIA` binding points at the `gene-media` R2 bucket (see `wr
 
 **Write-once.** A media id authorizes *reading* its blob, so an unconditional `PUT` would let anyone holding the id overwrite the author's ciphertext. The upload is conditional (`etagDoesNotMatch: "*"`): a `PUT` to an id that already holds an object is rejected `409 already_exists` and the original is left untouched. `GET`/`DELETE` are unchanged.
 
+"Write-once" means *no overwrite of a **live** object*, not a permanently burned id: a `DELETE` frees the id, after which a `PUT` can store a new blob there. That's harmless — the media key is sealed inside the (signed) feed entry and never reaches the relay, so any substituted blob is undecryptable garbage to the legitimate reader, and a `DELETE` requires already knowing the unguessable id.
+
 ## Develop
 
 ```sh

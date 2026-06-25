@@ -295,6 +295,11 @@ Future<void> _sendMissive(
         videoPath: path,
         durationMs: durationMs,
       );
+  // The missive is sealed and uploaded; drop the local plaintext take so the
+  // decrypted recording doesn't linger (the tightened output, when distinct, was
+  // already removed by the send itself). Clearing the path also retires the
+  // recorder's stale play/tighten actions.
+  await ref.read(recorderControllerProvider.notifier).clearTake();
   if (!context.mounted) return;
   messenger.showSnackBar(
     SnackBar(content: Text('Sent to ${recipient.name ?? recipient.shortId}')),

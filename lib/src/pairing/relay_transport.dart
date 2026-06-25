@@ -117,7 +117,10 @@ class InMemoryRelay implements RelayTransport {
 
   @override
   Future<void> createFeed(String id, List<int> authorPublicKey) async {
-    _feeds[id] = authorPublicKey;
+    // Pin the author key write-once, like the real relay (a second create with a
+    // different key is a no-op the relay reports as 409 / success), so the fake
+    // can't silently re-bind a feed's author and mask a double-create regression.
+    _feeds.putIfAbsent(id, () => authorPublicKey);
   }
 
   @override
@@ -152,12 +155,19 @@ class InMemoryRelay implements RelayTransport {
     if (!_feeds.containsKey(feedId)) throw FeedNotFoundException(feedId);
     final list = _entries[feedId];
     var deleted = 0;
+    var highestAcked = _acked[feedId] ?? -1;
     if (list != null) {
       final before = list.length;
+      for (final e in list) {
+        if (e.seq <= upTo && e.seq > highestAcked) highestAcked = e.seq;
+      }
       list.removeWhere((e) => e.seq <= upTo);
       deleted = before - list.length;
     }
-    if (upTo > (_acked[feedId] ?? -1)) _acked[feedId] = upTo;
+    // Clamp the watermark to the highest seq that actually existed at/below upTo,
+    // never the raw upTo, so a read-capability holder can't ack MAX_SAFE_INTEGER
+    // and brick the author — mirrors relay/src/feed_slot.ts so the fake matches.
+    if (highestAcked > (_acked[feedId] ?? -1)) _acked[feedId] = highestAcked;
     return deleted;
   }
 

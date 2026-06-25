@@ -384,9 +384,15 @@ List<int> _decodeKey(Object? value, String what, int expectedLength) {
   return bytes;
 }
 
+/// Feed ids are [Crypto.randomId] outputs: unpadded base64url. Validating the
+/// alphabet here means the per-message subkey's `gene-msg:<feedId>:` HKDF info
+/// (message_crypto.dart) can never be made ambiguous by a peer-supplied id
+/// containing the ':' delimiter — uniqueness is structural, not by luck.
+final _feedIdPattern = RegExp(r'^[A-Za-z0-9_-]+$');
+
 String _requireFeedId(Object? value) {
-  if (value is! String || value.isEmpty) {
-    throw const PairingException('missing feed id');
+  if (value is! String || value.isEmpty || !_feedIdPattern.hasMatch(value)) {
+    throw const PairingException('missing or malformed feed id');
   }
   return value;
 }

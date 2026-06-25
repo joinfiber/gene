@@ -74,23 +74,27 @@ class Conversation {
 
   final Ref _ref;
 
-  /// Sends are serialized through this chain. Two composes in flight at once
-  /// would otherwise both read the same outbound seq, and the relay would reject
-  /// the second as a duplicate — silently dropping that missive. Chaining makes
-  /// each send read-and-advance the seq atomically with respect to the others.
-  Future<void> _sends = Future.value();
+  /// Sends are serialized **per outbound feed**. Two composes to the *same*
+  /// contact in flight at once would otherwise both read the same outbound seq,
+  /// and the relay would reject the second as a duplicate — silently dropping
+  /// that missive. Chaining per feed makes each send read-and-advance that feed's
+  /// seq atomically, without letting a slow/stalled send to one contact block
+  /// sends to a different contact (independent feeds, independent seqs).
+  final Map<String, Future<void>> _sends = {};
 
   Future<void> send(
     Contact contact, {
     required String videoPath,
     required int durationMs,
   }) {
-    final result = _sends.then(
+    final feedId = contact.outboundFeedId;
+    final prior = _sends[feedId] ?? Future<void>.value();
+    final result = prior.then(
       (_) => _send(contact, videoPath: videoPath, durationMs: durationMs),
     );
-    // Keep the chain alive even if one send throws, so a single failure doesn't
-    // wedge every later send.
-    _sends = result.catchError((Object _) {});
+    // Keep this feed's chain alive even if one send throws, so a single failure
+    // doesn't wedge later sends to the same contact.
+    _sends[feedId] = result.catchError((Object _) {});
     return result;
   }
 

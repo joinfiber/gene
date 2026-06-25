@@ -8,28 +8,41 @@ import 'package:http/http.dart' as http;
 /// matching the relay's documented contract (see relay/README.md). The relay
 /// only ever sees opaque ciphertext and public keys.
 class HttpRelayTransport implements RelayTransport {
-  HttpRelayTransport({required this.baseUrl, http.Client? client})
-      : _client = client ?? http.Client();
+  HttpRelayTransport({
+    required this.baseUrl,
+    http.Client? client,
+    Duration timeout = const Duration(seconds: 60),
+  })  : _client = client ?? http.Client(),
+        _timeout = timeout;
 
   final String baseUrl;
   final http.Client _client;
+
+  /// Per-request ceiling. Bounds a stalled request so it can't pin a feed's send
+  /// queue (or a sync) indefinitely; on elapse the call throws `TimeoutException`
+  /// and the caller treats it as a retryable failure.
+  final Duration _timeout;
 
   static const _jsonHeaders = {'content-type': 'application/json'};
 
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
 
+  Future<http.Response> _timed(Future<http.Response> request) =>
+      request.timeout(_timeout);
+
   // --- pairing -------------------------------------------------------------
 
   @override
   Future<void> putInvite(String id, List<int> sealedPayload) async {
-    final response = await _client.put(_uri('/invite/$id'), body: sealedPayload);
+    final response =
+        await _timed(_client.put(_uri('/invite/$id'), body: sealedPayload));
     if (response.statusCode == 409) throw StateError('invite already exists');
     _expect(response, 201);
   }
 
   @override
   Future<List<int>?> getInvite(String id) async {
-    final response = await _client.get(_uri('/invite/$id'));
+    final response = await _timed(_client.get(_uri('/invite/$id')));
     if (response.statusCode == 404) return null;
     _expect(response, 200);
     return response.bodyBytes;
@@ -37,16 +50,19 @@ class HttpRelayTransport implements RelayTransport {
 
   @override
   Future<bool> redeemInvite(String id, List<int> sealedResponse) async {
-    final response =
-        await _client.post(_uri('/invite/$id/redeem'), body: sealedResponse);
-    if (response.statusCode == 409) return false; // already redeemed
+    final response = await _timed(
+        _client.post(_uri('/invite/$id/redeem'), body: sealedResponse));
+    // 409 already_redeemed, or 404 the slot is gone (expired between our
+    // getInvite and this redeem — a TOCTOU window): either way we did not claim
+    // it, so report "not redeemed" cleanly rather than throwing a raw 404.
+    if (response.statusCode == 409 || response.statusCode == 404) return false;
     _expect(response, 200);
     return true;
   }
 
   @override
   Future<List<int>?> pollRedeem(String id) async {
-    final response = await _client.get(_uri('/invite/$id/redeem'));
+    final response = await _timed(_client.get(_uri('/invite/$id/redeem')));
     if (response.statusCode == 204) return null; // not redeemed yet
     _expect(response, 200);
     return response.bodyBytes;
@@ -56,14 +72,15 @@ class HttpRelayTransport implements RelayTransport {
 
   @override
   Future<void> createFeed(String id, List<int> authorPublicKey) async {
-    final response = await _client.put(_uri('/feed/$id'), body: authorPublicKey);
+    final response =
+        await _timed(_client.put(_uri('/feed/$id'), body: authorPublicKey));
     if (response.statusCode == 409) return; // already bound
     _expect(response, 201);
   }
 
   @override
   Future<void> appendEntry(String feedId, FeedEntry entry) async {
-    final response = await _client.post(
+    final response = await _timed(_client.post(
       _uri('/feed/$feedId/entry'),
       headers: _jsonHeaders,
       body: jsonEncode({
@@ -71,7 +88,7 @@ class HttpRelayTransport implements RelayTransport {
         'sig': base64.encode(entry.signature),
         'ct': base64.encode(entry.ciphertext),
       }),
-    );
+    ));
     if (response.statusCode == 404) throw FeedNotFoundException(feedId);
     if (response.statusCode == 409) {
       throw _errorCode(response.body) == 'stale_seq'
@@ -83,42 +100,56 @@ class HttpRelayTransport implements RelayTransport {
 
   @override
   Future<List<FeedEntry>> fetchEntries(String feedId, {int since = 0}) async {
-    final response = await _client.get(_uri('/feed/$feedId?since=$since'));
+    final response =
+        await _timed(_client.get(_uri('/feed/$feedId?since=$since')));
     _expect(response, 200);
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    return [
-      for (final e in data['entries'] as List<dynamic>)
-        FeedEntry(
-          seq: (e as Map<String, dynamic>)['seq'] as int,
-          signature: base64.decode(e['sig'] as String),
-          ciphertext: base64.decode(e['ct'] as String),
-        ),
-    ];
+    // A 200 with an unexpected shape (a buggy or hostile relay) becomes a typed
+    // RelayException rather than a raw CastError/FormatException. Entry contents
+    // are still signature-verified downstream, so this is robustness, not the
+    // security boundary.
+    try {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return [
+        for (final e in data['entries'] as List<dynamic>)
+          FeedEntry(
+            seq: (e as Map<String, dynamic>)['seq'] as int,
+            signature: base64.decode(e['sig'] as String),
+            ciphertext: base64.decode(e['ct'] as String),
+          ),
+      ];
+    } catch (_) {
+      throw RelayException(response.statusCode, response.body);
+    }
   }
 
   @override
   Future<int> ackEntries(String feedId, int upTo) async {
-    final response = await _client.post(
+    final response = await _timed(_client.post(
       _uri('/feed/$feedId/ack'),
       headers: _jsonHeaders,
       body: jsonEncode({'upTo': upTo}),
-    );
+    ));
     if (response.statusCode == 404) throw FeedNotFoundException(feedId);
     _expect(response, 200);
-    return (jsonDecode(response.body) as Map<String, dynamic>)['deleted'] as int;
+    try {
+      return (jsonDecode(response.body) as Map<String, dynamic>)['deleted']
+          as int;
+    } catch (_) {
+      throw RelayException(response.statusCode, response.body);
+    }
   }
 
   // --- media ---------------------------------------------------------------
 
   @override
   Future<void> putMedia(String id, List<int> bytes) async {
-    final response = await _client.put(_uri('/media/$id'), body: bytes);
+    final response = await _timed(_client.put(_uri('/media/$id'), body: bytes));
     _expect(response, 201);
   }
 
   @override
   Future<List<int>?> getMedia(String id) async {
-    final response = await _client.get(_uri('/media/$id'));
+    final response = await _timed(_client.get(_uri('/media/$id')));
     if (response.statusCode == 404) return null;
     _expect(response, 200);
     return response.bodyBytes;
@@ -126,7 +157,7 @@ class HttpRelayTransport implements RelayTransport {
 
   @override
   Future<void> deleteMedia(String id) async {
-    final response = await _client.delete(_uri('/media/$id'));
+    final response = await _timed(_client.delete(_uri('/media/$id')));
     _expect(response, 204);
   }
 
