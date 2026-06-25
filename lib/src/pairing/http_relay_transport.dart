@@ -150,7 +150,10 @@ class HttpRelayTransport implements RelayTransport {
   @override
   Future<List<int>?> getMedia(String id) async {
     final response = await _timed(_client.get(_uri('/media/$id')));
-    if (response.statusCode == 404) return null;
+    // 404 (gone) and 503 (a deploy with no R2 binding) both mean "not available
+    // here" — return null so fetchNew skips/retries the entry rather than throwing
+    // out of a whole sync.
+    if (response.statusCode == 404 || response.statusCode == 503) return null;
     _expect(response, 200);
     return response.bodyBytes;
   }
