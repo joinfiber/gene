@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:gene/src/messaging/message_crypto.dart';
 import 'package:gene/src/messaging/message_store.dart';
 import 'package:gene/src/messaging/messaging_service.dart';
 import 'package:gene/src/messaging/models.dart';
@@ -112,12 +113,17 @@ class Conversation {
           videoPath: videoPath,
           durationMs: durationMs,
         );
-    // Advance past the seq we used, monotonically — never regress a value a
-    // concurrent send may already have advanced. (Not reached if send threw,
-    // so a failed send leaves the seq free to retry.)
+    // Advance past the seq we used — seq and outbound chain move together, as
+    // one ratchet step (the old chain key is dropped: that deletion is the
+    // forward secrecy). Monotonic: never regress a value a concurrent send may
+    // already have advanced. (Not reached if send threw, so a failed send
+    // leaves the seq — and its chain key — in place to retry.)
+    final advancedChain = await nextChainKey(live.outboundChainKey);
     await contacts.mutate(
       live.outboundFeedId,
-      (c) => c.outboundSeq > seq ? c : c.copyWith(outboundSeq: seq + 1),
+      (c) => c.outboundSeq > seq
+          ? c
+          : c.copyWith(outboundSeq: seq + 1, outboundChainKey: advancedChain),
     );
     // The missive is sealed and uploaded end-to-end; the local plaintext copy of
     // what we just sent has served its purpose. Drop it — best-effort, since a
@@ -146,9 +152,11 @@ class Conversation {
           upTo: result.cursor,
           mediaIds: result.mediaIds,
         );
-    await _ref
-        .read(contactsProvider.notifier)
-        .advanceInboundCursor(live.outboundFeedId, result.cursor);
+    await _ref.read(contactsProvider.notifier).advanceInbound(
+          live.outboundFeedId,
+          cursor: result.cursor,
+          chainKey: result.inboundChainKey,
+        );
     return result.received.length;
   }
 

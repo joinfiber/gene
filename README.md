@@ -24,7 +24,7 @@ The reference app adds one more idea on top: **latency is the budget.** Because 
 ## How it works (the 60-second version)
 
 - **Pair.** A single-use invite link carries a secret in its URL `#fragment` (never sent to a server). Both sides run an authenticated X25519 handshake — each signs the transcript with its identity key — and derive a shared conversation key `K`. (Trust is TOFU, verifiable after the fact via a two-sided **safety number**.)
-- **Talk.** A conversation is two append-only **feeds**, one per direction. Each entry is sealed under a per-message subkey of `K` and signed by a **per-feed** key (never the identity key, so the relay can't link your relationships). Media rides as an encrypted R2 blob whose key lives *inside* the sealed entry.
+- **Talk.** A conversation is two append-only **feeds**, one per direction. `K` is split into two per-feed **hash ratchets** and discarded; each entry is sealed under the feed's current chain key (which advances and is deleted per entry — **forward secrecy**) and signed by a **per-feed** key (never the identity key, so the relay can't link your relationships). Media rides as an encrypted R2 blob whose key lives *inside* the sealed entry.
 - **Deliver, then forget.** The recipient pulls, decrypts, acks; the relay destroys the entry and the blob.
 
 Full design and rationale: **[BACKEND.md](BACKEND.md)** · threat model (code-pointered): **[SECURITY.md](SECURITY.md)** · architecture: **[ARCHITECTURE.md](ARCHITECTURE.md)**.
@@ -83,7 +83,7 @@ cd relay && npm test                            # TypeScript: the relay in the r
 
 ## Status
 
-Reference + demonstration, not a shipped product. The capture, pairing, and delivery paths are implemented and tested end to end; the client is Android-only for now. Deliberate, documented deferrals: forward secrecy, relay rate-limiting/abuse controls, and streaming AEAD for very large media (see SECURITY.md and relay/README.md — it doesn't claim what it doesn't do).
+Reference + demonstration, not a shipped product. The capture, pairing, and delivery paths are implemented and tested end to end — now with **forward secrecy** (a per-feed hash ratchet) and out-of-band **verified contacts**; the client is Android-only for now. Deliberate, documented deferrals: post-compromise security (a DH ratchet), relay rate-limiting/abuse controls, and streaming AEAD for very large media (see SECURITY.md and relay/README.md — it doesn't claim what it doesn't do).
 
 ## License
 

@@ -10,10 +10,13 @@ import 'package:gene/src/pairing/models.dart';
 import 'package:gene/src/pairing/relay_transport.dart';
 
 /// What a fetch pulled: the new missives (media already written to disk), the
-/// cursor to advance to, and the media ids to destroy once the library is saved.
+/// cursor to advance to, the inbound chain key positioned at `cursor + 1`
+/// (persist it together with the cursor — they are one piece of state), and the
+/// media ids to destroy once the library is saved.
 typedef FetchResult = ({
   List<ReceivedMissive> received,
   int cursor,
+  List<int> inboundChainKey,
   List<String> mediaIds,
 });
 
@@ -34,15 +37,29 @@ class MessagingService {
 
   /// Encrypt [videoPath] under a fresh per-blob key, upload it, and append a
   /// sealed, signed entry at [seq] to the contact's outbound feed (creating the
-  /// feed on first send). The caller chooses [seq]. A relay that already holds
-  /// this seq (a retried send) is treated as success, and the freshly-uploaded
-  /// blob is cleaned up on any failure so a retry can't strand it.
+  /// feed on first send). The caller chooses [seq], which must be at or ahead of
+  /// the contact's `outboundSeq` (where its chain key is positioned): the entry
+  /// key is derived by fast-forwarding the chain to [seq] — forward-only, so a
+  /// retry with the same, un-advanced contact re-derives the same key, and a
+  /// seq *behind* the chain is underivable by construction (its key is gone).
+  /// A relay that already holds this seq (a retried send, pending or already
+  /// acked) is treated as success, and the freshly-uploaded blob is cleaned up
+  /// on any failure so a retry can't strand it.
   Future<void> send(
     Contact contact, {
     required int seq,
     required String videoPath,
     required int durationMs,
   }) async {
+    final steps = seq - contact.outboundSeq;
+    if (steps < 0 || steps > maxChainSkip) {
+      throw ArgumentError.value(
+        seq,
+        'seq',
+        'must be within [outboundSeq, outboundSeq + $maxChainSkip] — keys '
+            'behind the chain position are deliberately underivable',
+      );
+    }
     final mediaKey = Crypto.randomBytes(32);
     final mediaId = Crypto.randomId();
     var uploaded = false;
@@ -53,13 +70,13 @@ class MessagingService {
 
       final missive =
           Missive(mediaId: mediaId, mediaKey: mediaKey, durationMs: durationMs);
-      final subkey = await messageSubkey(
-        contact.conversationKey,
-        contact.outboundFeedId,
-        seq,
+      final entryKey = await messageKey(
+        await fastForwardChain(contact.outboundChainKey, steps),
       );
-      final ciphertext =
-          await Crypto.seal(subkey, utf8.encode(jsonEncode(missive.toJson())));
+      final ciphertext = await Crypto.seal(
+        entryKey,
+        padEntryPayload(utf8.encode(jsonEncode(missive.toJson()))),
+      );
       final writeKey =
           await Crypto.signingKeyFromSeed(contact.outboundWriteKeySeed);
       final signature =
@@ -99,11 +116,18 @@ class MessagingService {
     }
   }
 
-  /// Pull entries newer than the contact's cursor, decrypt each, and write its
-  /// media into [mediaDir]. **Stops** at the first entry it can't fully receive
-  /// (a key mismatch, or media not yet available) rather than advancing past it,
-  /// so nothing is acked or destroyed before it's been delivered. Does NOT ack
-  /// or delete — call [confirm] once the library is persisted.
+  /// Pull entries newer than the contact's cursor, decrypt each (walking the
+  /// inbound ratchet), and write its media into [mediaDir]. **Stops** at the
+  /// first entry it can't fully receive (a key mismatch, or media not yet
+  /// available) rather than advancing past it, so nothing is acked or destroyed
+  /// before it's been delivered — and the returned chain state always
+  /// corresponds to the returned cursor, so a crash before persisting simply
+  /// re-derives the same keys next sync. Does NOT ack or delete — call
+  /// [confirm] once the library is persisted.
+  ///
+  /// A seq missing from the relay's response (destroyed by the TTL sweep before
+  /// it was collected) is fast-forwarded over: its key is consumed and discarded,
+  /// permanently — correct forward secrecy for content that no longer exists.
   Future<FetchResult> fetchNew(
     Contact contact, {
     required Directory mediaDir,
@@ -115,17 +139,23 @@ class MessagingService {
     final received = <ReceivedMissive>[];
     final mediaIds = <String>[];
     var cursor = contact.inboundCursor;
+    // The chain key positioned at cursor + 1 — the committed state we return.
+    var chainKey = contact.inboundChainKey;
 
     for (final entry in entries) {
+      // Entries arrive ascending with seq > cursor, so steps is >= 0; a gap
+      // (TTL-swept seqs) fast-forwards. Refuse an absurd jump rather than let a
+      // hostile relay spin the CPU deriving keys.
+      final steps = entry.seq - (cursor + 1);
+      if (steps < 0 || steps > maxChainSkip) break;
+
       final Missive missive;
+      final List<int> chainKeyAtEntry;
       try {
-        final subkey = await messageSubkey(
-          contact.conversationKey,
-          contact.inboundFeedId,
-          entry.seq,
-        );
+        chainKeyAtEntry = await fastForwardChain(chainKey, steps);
+        final entryKey = await messageKey(chainKeyAtEntry);
         missive = Missive.fromJson(
-          jsonDecode(utf8.decode(await Crypto.open(subkey, entry.ciphertext)))
+          jsonDecode(utf8.decode(await Crypto.open(entryKey, entry.ciphertext)))
               as Map<String, dynamic>,
         );
       } catch (_) {
@@ -152,10 +182,17 @@ class MessagingService {
         receivedAtMs: DateTime.now().millisecondsSinceEpoch,
       ));
       mediaIds.add(missive.mediaId);
-      cursor = entry.seq; // entries are ascending → monotonic
+      // Commit: cursor and chain advance together (chain to entry.seq + 1).
+      cursor = entry.seq;
+      chainKey = await nextChainKey(chainKeyAtEntry);
     }
 
-    return (received: received, cursor: cursor, mediaIds: mediaIds);
+    return (
+      received: received,
+      cursor: cursor,
+      inboundChainKey: chainKey,
+      mediaIds: mediaIds,
+    );
   }
 
   /// Destroy-after-delivery: ack delivered entries (`seq <= upTo`) and delete

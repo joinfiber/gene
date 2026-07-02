@@ -66,10 +66,11 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   }
 
   Future<void> _showSafetyNumber() async {
+    final contact = _contact;
     final String number;
     try {
       final me = await ref.read(identityProvider.future);
-      number = await _contact.safetyNumber(me.publicKey);
+      number = await contact.safetyNumber(me.publicKey);
     } catch (_) {
       // A security affordance shouldn't fail silently — tell the user.
       if (mounted) {
@@ -80,7 +81,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       return;
     }
     if (!mounted) return;
-    await showDialog<void>(
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Safety number'),
@@ -108,12 +109,21 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Later'),
           ),
+          if (!contact.verified)
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('They match'),
+            ),
         ],
       ),
     );
+    // Record the TOFU→verified upgrade so the shield reflects it from now on.
+    if (confirmed == true && mounted) {
+      await ref.read(contactsProvider.notifier).markVerified(contact);
+    }
   }
 
   @override
@@ -131,9 +141,18 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       appBar: AppBar(
         title: Text(name),
         actions: [
+          // Filled + tinted once the safety number has been compared and
+          // confirmed (TOFU→verified); outlined while still unverified.
           IconButton(
-            tooltip: 'Verify safety number',
-            icon: const Icon(Icons.verified_user_outlined),
+            tooltip: contact.verified
+                ? 'Safety number verified'
+                : 'Verify safety number',
+            icon: Icon(
+              contact.verified ? Icons.verified_user : Icons.verified_user_outlined,
+              color: contact.verified
+                  ? Theme.of(context).colorScheme.primary
+                  : null,
+            ),
             onPressed: _showSafetyNumber,
           ),
         ],

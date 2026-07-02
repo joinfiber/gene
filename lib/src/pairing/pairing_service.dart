@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
 
 import 'package:gene/src/crypto/primitives.dart';
+import 'package:gene/src/messaging/message_crypto.dart';
 import 'package:gene/src/pairing/models.dart';
 import 'package:gene/src/pairing/relay_transport.dart';
 
@@ -141,17 +142,21 @@ class PairingService {
       throw const PairingException('invite already redeemed');
     }
 
+    final k = await _conversationKey(
+      z: z,
+      linkSecret: linkSecret,
+      inviteId: inviteId,
+      inviterEphemeral: inviterEphemeral,
+      redeemerEphemeral: ephemeralPublic,
+      inviterId: inviterPublicKey,
+      redeemerId: me.publicKey,
+    );
+    // Split K into the two per-feed ratchet roots and let K itself go out of
+    // scope — only the (forward-advancing) chain state is ever persisted.
     return Contact(
       peerPublicKey: inviterPublicKey,
-      conversationKey: await _conversationKey(
-        z: z,
-        linkSecret: linkSecret,
-        inviteId: inviteId,
-        inviterEphemeral: inviterEphemeral,
-        redeemerEphemeral: ephemeralPublic,
-        inviterId: inviterPublicKey,
-        redeemerId: me.publicKey,
-      ),
+      outboundChainKey: await chainRoot(k, outboundFeedId),
+      inboundChainKey: await chainRoot(k, inboundFeedId),
       outboundFeedId: outboundFeedId,
       outboundWriteKeySeed: await Crypto.seedOf(writeKey),
       inboundFeedId: inboundFeedId,
@@ -226,17 +231,20 @@ class PendingPairing {
       throw const PairingException('redeem signature did not verify');
     }
 
+    final k = await _conversationKey(
+      z: z,
+      linkSecret: _linkSecret,
+      inviteId: inviteId,
+      inviterEphemeral: myEphemeralPublic,
+      redeemerEphemeral: peerEphemeral,
+      inviterId: _me.publicKey,
+      redeemerId: peerPublicKey,
+    );
+    // As on the redeemer side: derive the two chain roots, never persist K.
     return Contact(
       peerPublicKey: peerPublicKey,
-      conversationKey: await _conversationKey(
-        z: z,
-        linkSecret: _linkSecret,
-        inviteId: inviteId,
-        inviterEphemeral: myEphemeralPublic,
-        redeemerEphemeral: peerEphemeral,
-        inviterId: _me.publicKey,
-        redeemerId: peerPublicKey,
-      ),
+      outboundChainKey: await chainRoot(k, outboundFeedId),
+      inboundChainKey: await chainRoot(k, inboundFeedId),
       outboundFeedId: outboundFeedId,
       outboundWriteKeySeed: await Crypto.seedOf(_writeKey),
       inboundFeedId: inboundFeedId,
@@ -385,9 +393,9 @@ List<int> _decodeKey(Object? value, String what, int expectedLength) {
 }
 
 /// Feed ids are [Crypto.randomId] outputs: unpadded base64url. Validating the
-/// alphabet here means the per-message subkey's `gene-msg:<feedId>:` HKDF info
-/// (message_crypto.dart) can never be made ambiguous by a peer-supplied id
-/// containing the ':' delimiter — uniqueness is structural, not by luck.
+/// alphabet keeps a peer-supplied id from carrying anything unexpected into the
+/// ratchet's `chainRoot` derivation (message_crypto.dart) or the on-disk
+/// `<feedId>-<seq>.mp4` file naming — structural, not by luck.
 final _feedIdPattern = RegExp(r'^[A-Za-z0-9_-]+$');
 
 String _requireFeedId(Object? value) {

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +14,8 @@ import 'package:gene/src/pairing/models.dart';
 import 'package:gene/src/pairing/pairing_providers.dart';
 import 'package:gene/src/pairing/pairing_service.dart';
 import 'package:gene/src/pairing/relay_transport.dart';
+
+import 'support/mem_secure_storage.dart';
 
 const _linkBase = 'https://relay.test/i/';
 
@@ -103,7 +106,8 @@ void main() {
 
     final tampered = Contact(
       peerPublicKey: p.bob.peerPublicKey,
-      conversationKey: Crypto.randomBytes(32), // wrong K
+      outboundChainKey: Crypto.randomBytes(32), // wrong ratchet state
+      inboundChainKey: Crypto.randomBytes(32),
       outboundFeedId: p.bob.outboundFeedId,
       outboundWriteKeySeed: p.bob.outboundWriteKeySeed,
       inboundFeedId: p.bob.inboundFeedId,
@@ -339,13 +343,149 @@ void main() {
     expect(signedMessage(258, const <int>[]), [0, 0, 0, 0, 0, 0, 1, 2]);
   });
 
-  test('per-message subkey is deterministic and bound to feed + seq', () async {
+  test('the ratchet chain is deterministic, feed-bound, and domain-separated',
+      () async {
     final k = Crypto.randomBytes(32);
-    expect(await messageSubkey(k, 'feed', 1),
-        equals(await messageSubkey(k, 'feed', 1)));
-    expect(await messageSubkey(k, 'feed', 1),
-        isNot(equals(await messageSubkey(k, 'feed', 2))));
-    expect(await messageSubkey(k, 'feedA', 1),
-        isNot(equals(await messageSubkey(k, 'feedB', 1))));
+    // Deterministic: both sides derive the same root and steps.
+    expect(await chainRoot(k, 'feed'), equals(await chainRoot(k, 'feed')));
+    // Bound to the feed: different feeds → unrelated chains.
+    expect(await chainRoot(k, 'feedA'),
+        isNot(equals(await chainRoot(k, 'feedB'))));
+    final ck = await chainRoot(k, 'feed');
+    // Message key and next chain key are domain-separated from each other and
+    // from the chain key itself.
+    expect(await messageKey(ck), isNot(equals(await nextChainKey(ck))));
+    expect(await messageKey(ck), isNot(equals(ck)));
+    // Fast-forward is exactly repeated stepping.
+    expect(await fastForwardChain(ck, 3),
+        equals(await nextChainKey(await nextChainKey(await nextChainKey(ck)))));
+  });
+
+  test('forward secrecy: after delivery, current state cannot decrypt a '
+      'previously captured ciphertext', () async {
+    final p = await _pair();
+    final service = MessagingService(p.relay);
+    final tmp = await Directory.systemTemp.createTemp('gene_fs');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+
+    await service.send(p.alice,
+        seq: 1,
+        videoPath: _fakeVideoNamed(tmp, 'f.mp4', List<int>.filled(600, 3)).path,
+        durationMs: 100);
+
+    // A wiretap of the relay captures the sealed entry in transit.
+    final captured = p.relay.entryCiphertext(p.bob.inboundFeedId, 1)!;
+
+    // Bob receives it; his persisted state advances (cursor 1, chain at 2).
+    final inbox = await Directory.systemTemp.createTemp('gene_fs_in');
+    addTearDown(() => inbox.deleteSync(recursive: true));
+    final r = await service.fetchNew(p.bob, mediaDir: inbox);
+    expect(r.received, hasLength(1));
+    final bobAfter = p.bob.copyWith(
+      inboundCursor: r.cursor,
+      inboundChainKey: r.inboundChainKey,
+    );
+
+    // Compromise the device NOW: everything it holds is bobAfter. The chain is
+    // one-way, so the key for seq 1 must be underivable — the captured
+    // ciphertext stays sealed.
+    final staleKey = await messageKey(bobAfter.inboundChainKey);
+    await expectLater(Crypto.open(staleKey, captured), throwsA(anything));
+    // And a re-fetch with the advanced state cannot re-deliver it either
+    // (cursor is past it; the relay copy would normally be destroyed on ack).
+    final again = await service.fetchNew(bobAfter, mediaDir: inbox);
+    expect(again.received, isEmpty);
+  });
+
+  test('a TTL-swept gap is fast-forwarded: later missives still decrypt, the '
+      'swept key is consumed forever', () async {
+    final p = await _pair();
+    final service = MessagingService(p.relay);
+    final tmp = await Directory.systemTemp.createTemp('gene_gap');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+
+    // Alice sends 1 and 2; the relay's TTL sweep destroys 1 (and its media)
+    // before Bob ever collects it.
+    await service.send(p.alice,
+        seq: 1,
+        videoPath: _fakeVideoNamed(tmp, 'g1.mp4', const [1]).path,
+        durationMs: 1);
+    final firstBlobs = p.relay.mediaIds.toSet();
+    await service.send(p.alice,
+        seq: 2,
+        videoPath: _fakeVideoNamed(tmp, 'g2.mp4', List<int>.filled(300, 9)).path,
+        durationMs: 2);
+    p.relay.sweepEntry(p.bob.inboundFeedId, 1);
+    for (final id in firstBlobs) {
+      await p.relay.deleteMedia(id);
+    }
+
+    // Bob's fetch walks the chain over the gap and still opens seq 2.
+    final inbox = await Directory.systemTemp.createTemp('gene_gap_in');
+    addTearDown(() => inbox.deleteSync(recursive: true));
+    final r = await service.fetchNew(p.bob, mediaDir: inbox);
+    expect(r.received.map((m) => m.seq), [2]);
+    expect(r.cursor, 2);
+  });
+
+  test('a legacy (v1) stored contact migrates: chains derived, K purged, '
+      'messaging still works end-to-end', () async {
+    // Hand-craft two v1 contact records sharing a K, as the old format stored
+    // them ('k' present, no chain keys).
+    final k = Crypto.randomBytes(32);
+    final aliceWrite = await Crypto.newSigningKey();
+    final bobWrite = await Crypto.newSigningKey();
+    final aliceId = await LocalIdentity.generate();
+    final bobId = await LocalIdentity.generate();
+    Map<String, dynamic> v1(
+      List<int> peer,
+      List<int> seed,
+      String out,
+      String inn,
+    ) =>
+        {
+          'peer': base64.encode(peer),
+          'k': base64.encode(k),
+          'out': out,
+          'seed': base64.encode(seed),
+          'in': inn,
+          'name': null,
+          'seqOut': 1,
+          'curIn': 0,
+        };
+
+    final aliceStorage = MemSecureStorage({
+      'gene.contacts': jsonEncode([
+        v1(bobId.publicKey, await Crypto.seedOf(aliceWrite), 'feedA', 'feedB'),
+      ]),
+    });
+    final bobStorage = MemSecureStorage({
+      'gene.contacts': jsonEncode([
+        v1(aliceId.publicKey, await Crypto.seedOf(bobWrite), 'feedB', 'feedA'),
+      ]),
+    });
+
+    final alice =
+        (await ContactStore(storage: aliceStorage).load()).single;
+    final bob = (await ContactStore(storage: bobStorage).load()).single;
+
+    // K is purged from storage by the migration save-back.
+    expect(aliceStorage.data['gene.contacts'], isNot(contains('"k"')));
+    // Peers derived matching chains from the same K.
+    expect(alice.outboundChainKey, equals(bob.inboundChainKey));
+
+    // And the migrated contacts interoperate end-to-end.
+    final relay = InMemoryRelay();
+    final service = MessagingService(relay);
+    final tmp = await Directory.systemTemp.createTemp('gene_migrate');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+    await service.send(alice,
+        seq: 1,
+        videoPath: _fakeVideoNamed(tmp, 'm.mp4', List<int>.filled(200, 4)).path,
+        durationMs: 50);
+    final inbox = await Directory.systemTemp.createTemp('gene_migrate_in');
+    addTearDown(() => inbox.deleteSync(recursive: true));
+    final r = await service.fetchNew(bob, mediaDir: inbox);
+    expect(r.received, hasLength(1));
   });
 }

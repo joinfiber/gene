@@ -1,55 +1,18 @@
 import 'dart:convert';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gene/src/crypto/primitives.dart';
 import 'package:gene/src/identity/identity_store.dart';
 import 'package:gene/src/pairing/models.dart';
 
-/// In-memory [FlutterSecureStorage] for tests — overrides only read/write so the
-/// store works without the platform Keystore channel.
-class _MemSecureStorage extends FlutterSecureStorage {
-  _MemSecureStorage([Map<String, String>? seed]) : data = {...?seed};
-
-  final Map<String, String> data;
-
-  @override
-  Future<String?> read({
-    required String key,
-    AppleOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    AppleOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async =>
-      data[key];
-
-  @override
-  Future<void> write({
-    required String key,
-    required String? value,
-    AppleOptions? iOptions,
-    AndroidOptions? aOptions,
-    LinuxOptions? lOptions,
-    WebOptions? webOptions,
-    AppleOptions? mOptions,
-    WindowsOptions? wOptions,
-  }) async {
-    if (value == null) {
-      data.remove(key);
-    } else {
-      data[key] = value;
-    }
-  }
-}
+import 'support/mem_secure_storage.dart';
 
 const _seedKey = 'gene.identity.ed25519.seed';
 
 void main() {
   test('first launch generates, persists, and reads back one identity',
       () async {
-    final storage = _MemSecureStorage();
+    final storage = MemSecureStorage();
     final id = await IdentityStore(storage: storage).loadOrCreate();
 
     expect(id.publicKey, hasLength(32));
@@ -62,7 +25,7 @@ void main() {
   test('a valid stored seed is loaded as-is, never re-minted', () async {
     final original = await LocalIdentity.generate();
     final seed = base64.encode(await Crypto.seedOf(original.keyPair));
-    final storage = _MemSecureStorage({_seedKey: seed});
+    final storage = MemSecureStorage({_seedKey: seed});
 
     final loaded = await IdentityStore(storage: storage).loadOrCreate();
     expect(loaded.publicKey, equals(original.publicKey));
@@ -72,7 +35,7 @@ void main() {
 
   test('a structurally-corrupt seed is discarded and a fresh identity minted',
       () async {
-    final storage = _MemSecureStorage({_seedKey: 'not%%%valid%%%base64'});
+    final storage = MemSecureStorage({_seedKey: 'not%%%valid%%%base64'});
     final id = await IdentityStore(storage: storage).loadOrCreate();
 
     expect(id.publicKey, hasLength(32));
@@ -82,7 +45,7 @@ void main() {
 
   test('a decodable but wrong-length seed is discarded and re-minted', () async {
     final storage =
-        _MemSecureStorage({_seedKey: base64.encode(List<int>.filled(16, 1))});
+        MemSecureStorage({_seedKey: base64.encode(List<int>.filled(16, 1))});
     final id = await IdentityStore(storage: storage).loadOrCreate();
 
     expect(id.publicKey, hasLength(32));

@@ -79,13 +79,25 @@ class ContactsController extends AsyncNotifier<List<Contact>> {
           if (c.outboundFeedId == outboundFeedId) change(c) else c,
       ]);
 
-  /// Advance a contact's inbound cursor monotonically (never regress it).
-  Future<void> advanceInboundCursor(String outboundFeedId, int cursor) =>
+  /// Advance a contact's inbound cursor monotonically (never regress it), and
+  /// with it the inbound chain key — the two are one piece of ratchet state
+  /// ([chainKey] must be positioned at [cursor] + 1, as `fetchNew` returns it).
+  Future<void> advanceInbound(
+    String outboundFeedId, {
+    required int cursor,
+    required List<int> chainKey,
+  }) =>
       mutate(
         outboundFeedId,
-        (c) =>
-            cursor > c.inboundCursor ? c.copyWith(inboundCursor: cursor) : c,
+        (c) => cursor > c.inboundCursor
+            ? c.copyWith(inboundCursor: cursor, inboundChainKey: chainKey)
+            : c,
       );
+
+  /// Record that the user compared safety numbers out-of-band and they matched
+  /// — the TOFU→verified upgrade.
+  Future<void> markVerified(Contact contact) =>
+      mutate(contact.outboundFeedId, (c) => c.copyWith(verified: true));
 
   /// Publish [next] immediately, then persist — with writes serialized so two
   /// near-simultaneous pairings can't clobber each other's contact in storage

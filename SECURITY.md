@@ -29,20 +29,26 @@ can audit is a property.
 ## Can the relay read a video? Follow the key chain.
 
 1. **Pairing derives a shared key `K` on each device and never sends it.**
-   X25519 ECDH → `z`, then `K = HKDF(z, salt = S, info = transcript)`.
-   → `lib/src/pairing/pairing_service.dart` (`_conversationKey`), `lib/src/crypto/primitives.dart` (`Crypto.sharedSecret`, `Crypto.hkdf`).
+   X25519 ECDH → `z`, then `K = HKDF(z, salt = S, info = transcript)`. `K` is then
+   split into two per-feed **ratchet chains** and **discarded** — only the
+   forward-advancing chain state is ever persisted.
+   → `lib/src/pairing/pairing_service.dart` (`_conversationKey`, then `chainRoot` per feed), `lib/src/crypto/primitives.dart` (`Crypto.sharedSecret`, `Crypto.hkdf`).
    The link secret `S` lives in the URL `#fragment`; the app parses it locally and a browser never transmits a fragment, so the relay never sees `S` either.
 
 2. **Sending a video seals it before upload.** A fresh random per-blob key `mk`
    encrypts the video; only the ciphertext goes to R2. `mk` + the object id are
-   placed in a message that is then sealed under a per-message subkey of `K`.
-   → `lib/src/messaging/messaging_service.dart` (`send`): `Crypto.seal(mediaKey, clear)` → `putMedia`, then `Crypto.seal(subkey, …Missive…)`.
+   placed in a message that is then sealed under the sending feed's **current
+   chain key** — a one-way hash ratchet that advances with each entry, old keys
+   deleted.
+   → `lib/src/messaging/messaging_service.dart` (`send`): `Crypto.seal(mediaKey, clear)` → `putMedia`, then `Crypto.seal(messageKey(chain), …Missive…)`.
    → `lib/src/messaging/models.dart` (`Missive` carries `mediaId` + `mediaKey`).
-   → `lib/src/messaging/message_crypto.dart` (`messageSubkey` = `HKDF(K, feedId‖seq)`).
+   → `lib/src/messaging/message_crypto.dart` (`chainRoot` · `nextChainKey` · `messageKey` — the per-feed hash ratchet).
 
-3. **So the only copy of `mk` is locked inside a message encrypted under `K`,**
-   and `K` is only on the two devices. To read the video you need `mk`; to get
-   `mk` you need `K`. The relay has neither.
+3. **So the only copy of `mk` is locked inside a message encrypted under chain
+   state that exists only on the two devices** — and, once the message is
+   delivered and the chain advances, not even there. To read the video you need
+   `mk`; to get `mk` you need that message's chain key. The relay never has
+   either; after delivery, nobody does.
 
 4. **The relay stores and serves opaque bytes only.** It verifies an Ed25519
    signature over `seq‖ciphertext` (it never decrypts), then appends.
@@ -56,7 +62,9 @@ is itself ciphertext. There is no plaintext and no usable key on the relay side.
 
 | Property | Enforced by |
 |---|---|
-| Conversation key `K` never leaves the device | `pairing_service.dart` derives it locally; only public keys + sealed blobs are sent |
+| Conversation key `K` never leaves the device — or persists on it | `pairing_service.dart` derives it locally, splits it into per-feed chain roots (`message_crypto.dart` `chainRoot`), and lets it go out of scope; only public keys + sealed blobs are sent |
+| **Forward secrecy** for delivered content | per-feed one-way hash ratchet — each entry's key comes from the feed's chain position, and the chain advances (old key deleted) in the same mutation that advances the seq/cursor — `message_crypto.dart`, `messaging_service.dart` (`send`/`fetchNew`), `messaging_providers.dart`; proven mechanically in `test/messaging_test.dart` ("forward secrecy: …") |
+| Entry sizes don't leak payload shape | sealed entries pad to a fixed bucket — `message_crypto.dart` (`padEntryPayload`); media size still leaks (see below) |
 | Handshake is **authenticated** (identity is proven, not asserted) | both sides sign the transcript and verify before deriving `K` — `pairing_service.dart` (`_inviteTranscript`/`_redeemTranscript`, `Crypto.verify`) |
 | `K` also depends on the out-of-band secret `S` | `K = HKDF(z, salt = S, …)` — tampering changes `K`, so a MITM fails to communicate rather than silently succeeding |
 | Media sealed before it ever leaves the device | `messaging_service.dart` (`send`) |
@@ -68,7 +76,7 @@ is itself ciphertext. There is no plaintext and no usable key on the relay side.
 | Replay/regression rejected | per-feed acked-watermark — `relay/src/feed_slot.ts` (`append` rejects `seq ≤ ackedUpTo`; `ack` clamps the watermark to the highest stored seq, so a reader can't brick the author) |
 | Destroy-after-delivery | recipient persists locally, *then* destroys the relay copy — `messaging_service.dart` (`fetchNew` writes media to disk; `confirm` acks + deletes), ordered persist-before-destroy in `messaging_providers.dart` (`Conversation.sync`); `relay/src/feed_slot.ts` (`ack`), media `DELETE` |
 | Media can't be silently overwritten | `PUT /media/:id` is write-once (`etagDoesNotMatch:"*"` → 409) — `relay/src/index.ts` (`handleMedia`) |
-| Keys at rest | identity seed + per-contact `K`/write seeds in the platform Keystore — `lib/src/identity/identity_store.dart`, `lib/src/storage/secure_storage.dart` |
+| Keys at rest | identity seed + per-contact chain state/write seeds in the platform Keystore (`K` itself is never stored) — `lib/src/identity/identity_store.dart`, `lib/src/pairing/contact_store.dart`, `lib/src/storage/secure_storage.dart` |
 
 ## What it does NOT defend (the honest edges)
 
@@ -78,11 +86,14 @@ is itself ciphertext. There is no plaintext and no usable key on the relay side.
   `lib/src/pairing/models.dart`) is identical on both phones only if no one is in
   the middle — compare it over a channel you already trust. Not yet *enforced* in
   the UX, so it relies on the users choosing to check.
-- **No forward secrecy / post-compromise security (yet).** `K` is static per
-  conversation, so a compromised `K` exposes past messages under it. The
-  per-message subkey is derived deterministically from `K`, so it is *not* a
-  ratchet. This is the deliberate deferral in BACKEND.md §4; the Double Ratchet
-  (or a periodic rekey) is the upgrade.
+- **Forward secrecy: yes. Post-compromise security: no.** Each feed's keys come
+  from a one-way hash ratchet whose consumed state is deleted, so a device
+  compromised *today* cannot decrypt ciphertext captured *before* — even though
+  the relay copy was already destroyed on delivery. But the ratchet is
+  symmetric: today's chain state derives all *future* keys until the parties
+  re-pair. Healing after a compromise (post-compromise security) needs a DH
+  ratchet (Double Ratchet), which remains the documented upgrade
+  (see VISION.md).
 - **Metadata.** The relay/network see IP + timing, the pairing event, and
   sizes/cadence. Sizes/cadence are mitigable (padding + fixed-cadence polling —
   designed, not built); **IP/timing are not** without a mixnet (out of scope for
@@ -108,8 +119,10 @@ is itself ciphertext. There is no plaintext and no usable key on the relay side.
   `workerd` runtime and assert the relay only stores/serves bytes, verifies
   signatures, and destroys on ack.
 - **Run the client tests** (`flutter test`) — `test/messaging_test.dart` drives a
-  full send→relay→receive loop and asserts the media round-trips *and* that a peer
-  with the wrong `K` decrypts nothing.
+  full send→relay→receive loop and asserts the media round-trips, that a peer with
+  the wrong ratchet state decrypts nothing, and — the forward-secrecy proof — that
+  a ciphertext captured in transit cannot be decrypted from the device's
+  post-delivery state.
 - **Inspect what's stored:** every relay body is `application/octet-stream`
   ciphertext or base64 inside JSON; grep `relay/src` for any `decrypt`/`open` —
   there is none on the server.

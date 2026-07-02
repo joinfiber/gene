@@ -26,24 +26,37 @@ class LocalIdentity {
 /// this device. Pure data, so it serializes straight to secure storage. A
 /// conversation is two unidirectional feeds: one we author, one the peer does,
 /// plus the per-direction sequence bookkeeping that drives delivery.
+///
+/// **Forward secrecy:** the conversation key `K` from pairing is split into two
+/// per-feed hash-ratchet chains (message_crypto.dart) and then discarded — it is
+/// deliberately NOT stored here. What this record holds is only the *current*
+/// chain state, from which past message keys cannot be re-derived.
 class Contact {
   Contact({
     required this.peerPublicKey,
-    required this.conversationKey,
+    required this.outboundChainKey,
+    required this.inboundChainKey,
     required this.outboundFeedId,
     required this.outboundWriteKeySeed,
     required this.inboundFeedId,
     this.name,
     this.outboundSeq = 1,
     this.inboundCursor = 0,
+    this.verified = false,
   });
 
   /// The peer's Ed25519 identity public key.
   final List<int> peerPublicKey;
 
-  /// The shared conversation key `K` (32 bytes) — the root every message
-  /// subkey is derived from.
-  final List<int> conversationKey;
+  /// The outbound feed's chain key, positioned at [outboundSeq]: it derives the
+  /// key that seals the *next* entry we author. Advanced (one-way) in the same
+  /// mutation that advances [outboundSeq]; prior keys are gone.
+  final List<int> outboundChainKey;
+
+  /// The inbound feed's chain key, positioned at [inboundCursor] + 1: it derives
+  /// the key for the next entry we expect to receive. Advanced in the same
+  /// mutation that advances [inboundCursor]; prior keys are gone.
+  final List<int> inboundChainKey;
 
   /// The feed we author; sign entries with the key rebuilt from
   /// [outboundWriteKeySeed] (a per-feed key, never the identity key).
@@ -62,6 +75,10 @@ class Contact {
   /// Highest sequence number we've received and acked on [inboundFeedId]; used
   /// as the `since` cursor when pulling.
   final int inboundCursor;
+
+  /// Whether the user has compared safety numbers out-of-band and confirmed they
+  /// match — the TOFU→verified upgrade, recorded so the UI can show it.
+  final bool verified;
 
   /// A short, stable handle derived from the peer key, for display before the
   /// user names the contact. Not a security check — see [safetyNumber].
@@ -100,40 +117,53 @@ class Contact {
     String? name,
     int? outboundSeq,
     int? inboundCursor,
+    List<int>? outboundChainKey,
+    List<int>? inboundChainKey,
+    bool? verified,
   }) =>
       Contact(
         peerPublicKey: peerPublicKey,
-        conversationKey: conversationKey,
+        outboundChainKey: outboundChainKey ?? this.outboundChainKey,
+        inboundChainKey: inboundChainKey ?? this.inboundChainKey,
         outboundFeedId: outboundFeedId,
         outboundWriteKeySeed: outboundWriteKeySeed,
         inboundFeedId: inboundFeedId,
         name: name ?? this.name,
         outboundSeq: outboundSeq ?? this.outboundSeq,
         inboundCursor: inboundCursor ?? this.inboundCursor,
+        verified: verified ?? this.verified,
       );
 
   Contact withName(String name) => copyWith(name: name);
 
   Map<String, dynamic> toJson() => {
         'peer': base64.encode(peerPublicKey),
-        'k': base64.encode(conversationKey),
+        'cko': base64.encode(outboundChainKey),
+        'cki': base64.encode(inboundChainKey),
         'out': outboundFeedId,
         'seed': base64.encode(outboundWriteKeySeed),
         'in': inboundFeedId,
         'name': name,
         'seqOut': outboundSeq,
         'curIn': inboundCursor,
+        'v': verified,
       };
+
+  /// Whether [json] is the legacy (v1) shape that stored the conversation key
+  /// `K` directly — migrated (chains derived, `K` purged) by `ContactStore`.
+  static bool isLegacyJson(Map<String, dynamic> json) => json.containsKey('k');
 
   factory Contact.fromJson(Map<String, dynamic> json) => Contact(
         peerPublicKey: base64.decode(json['peer'] as String),
-        conversationKey: base64.decode(json['k'] as String),
+        outboundChainKey: base64.decode(json['cko'] as String),
+        inboundChainKey: base64.decode(json['cki'] as String),
         outboundFeedId: json['out'] as String,
         outboundWriteKeySeed: base64.decode(json['seed'] as String),
         inboundFeedId: json['in'] as String,
         name: json['name'] as String?,
         outboundSeq: json['seqOut'] as int? ?? 1,
         inboundCursor: json['curIn'] as int? ?? 0,
+        verified: json['v'] as bool? ?? false,
       );
 }
 

@@ -62,25 +62,33 @@ void main() {
     });
   });
 
-  test('Contact survives a JSON round-trip', () {
+  test('Contact survives a JSON round-trip (and never serializes a K)', () {
     final contact = Contact(
       peerPublicKey: [1, 2, 3],
-      conversationKey: List<int>.filled(32, 7),
+      outboundChainKey: List<int>.filled(32, 7),
+      inboundChainKey: List<int>.filled(32, 8),
       outboundFeedId: 'out-feed',
       outboundWriteKeySeed: List<int>.filled(32, 9),
       inboundFeedId: 'in-feed',
       name: 'Sam',
+      verified: true,
     );
 
+    final json = contact.toJson();
+    expect(json.containsKey('k'), isFalse,
+        reason: 'the conversation key is never persisted (forward secrecy)');
+
     final restored = Contact.fromJson(
-      jsonDecode(jsonEncode(contact.toJson())) as Map<String, dynamic>,
+      jsonDecode(jsonEncode(json)) as Map<String, dynamic>,
     );
 
     expect(restored.peerPublicKey, contact.peerPublicKey);
-    expect(restored.conversationKey, contact.conversationKey);
+    expect(restored.outboundChainKey, contact.outboundChainKey);
+    expect(restored.inboundChainKey, contact.inboundChainKey);
     expect(restored.outboundFeedId, contact.outboundFeedId);
     expect(restored.outboundWriteKeySeed, contact.outboundWriteKeySeed);
     expect(restored.inboundFeedId, contact.inboundFeedId);
     expect(restored.name, 'Sam');
+    expect(restored.verified, isTrue);
   });
 }

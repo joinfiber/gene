@@ -26,7 +26,7 @@ lib/
       contact_store.dart         contacts in secure storage
       pairing_providers.dart     identity / contacts / relay providers
     messaging/
-      message_crypto.dart        signed-message format + per-message subkeys
+      message_crypto.dart        signed-message format + the per-feed forward-secret ratchet
       messaging_service.dart     send · fetchNew · confirm  (encrypt → relay → decrypt)
       message_store.dart         the local missive library
       models.dart                Missive · ReceivedMissive
@@ -98,7 +98,7 @@ Defensive throughout: ECDH rejects an all-zero (low-order) shared secret, and ev
 
 A conversation is **two unidirectional, append-only feeds** (BACKEND.md §3–§4). Each is bound to a fresh **per-feed Ed25519 key** — never the identity key — so the relay can't tell that two feeds share an author (social-graph protection). These un-linkability and authenticated-pairing properties belong to the *primitive* — any app on this core inherits them; the missive UI just surfaces the safety number.
 
-- **Sealing** — each entry is sealed with XChaCha20-Poly1305 under a per-message subkey `HKDF(K, feedId‖seq)`; the feed id *is* the direction, so sender and receiver derive the same key with no ratchet state to sync. The signed bytes (`seq‖ciphertext`) and the subkey derivation live in `message_crypto.dart` — one source of truth the relay's verifier matches byte-for-byte.
+- **Sealing (forward-secure)** — pairing's `K` is split into two per-feed **chain roots** and discarded; each entry is sealed with XChaCha20-Poly1305 under `messageKey` of the feed's chain position, and the chain steps one-way per entry (old key deleted), giving forward secrecy with the seq as the only sync state. Sealed payloads pad to a fixed bucket so entry size doesn't leak shape. The ratchet + padding live in `message_crypto.dart`; the signed bytes (`seq‖ciphertext`) are the one thing the relay's verifier matches byte-for-byte. (Not post-compromise-secure — a DH ratchet is the upgrade; see SECURITY.md.)
 - **Media** — sealed under a fresh per-blob key, uploaded to R2; the (sealed) entry carries the object id and that key, so the media key never reaches the relay. (Sealed in memory — fine for short missives; streaming AEAD is the large-video upgrade.)
 - **Lazy feed creation** — `MessagingService.send` appends, and on a "feed not found" binds the feed with its author key and retries. A retried send (the relay already holds that seq) is treated as delivered, and a freshly-uploaded blob is deleted on any append failure — so neither a feed nor a media object is orphaned. Pairing therefore creates *no* feeds.
 - **Destroy-after-delivery** — split for crash-safety: `fetchNew` pulls new entries, decrypts, and writes media to disk (stopping at the first it can't fully receive); the `Conversation` orchestrator persists that library; only then does `confirm` ack — the relay deletes the delivered entry, and the client deletes the R2 blob. The relay copy is never destroyed before the device has durably kept its own — and "durably" is literal: the library index is written via temp file → `flush` → rename (an atomic replace on POSIX, crash-recoverable on Windows — never a truncate-in-place a crash could tear; load prefers a leftover temp as the newer state), and a lost or corrupt index is rebuilt from the on-disk media (each named `<feedId>-<seq>.mp4`), so a torn write degrades to reconstruction rather than silent loss (`message_store.dart`, `test/message_store_test.dart`).

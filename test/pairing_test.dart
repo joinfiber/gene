@@ -23,8 +23,10 @@ void main() {
     final aliceContact = await pending.tryComplete(relay);
     expect(aliceContact, isNotNull);
 
-    // Both derived the *same* conversation key from the ECDH.
-    expect(aliceContact!.conversationKey, equals(bobContact.conversationKey));
+    // Both derived the same ratchet state from the ECDH: my outbound chain is
+    // the peer's inbound chain (same feed, same root), and vice versa.
+    expect(aliceContact!.outboundChainKey, equals(bobContact.inboundChainKey));
+    expect(aliceContact.inboundChainKey, equals(bobContact.outboundChainKey));
 
     // Each knows the other's identity.
     expect(aliceContact.peerPublicKey, equals(bob.publicKey));
@@ -72,7 +74,8 @@ void main() {
     final mallory = await LocalIdentity.generate();
     final spoofed = Contact(
       peerPublicKey: mallory.publicKey,
-      conversationKey: aliceContact.conversationKey,
+      outboundChainKey: aliceContact.outboundChainKey,
+      inboundChainKey: aliceContact.inboundChainKey,
       outboundFeedId: aliceContact.outboundFeedId,
       outboundWriteKeySeed: aliceContact.outboundWriteKeySeed,
       inboundFeedId: aliceContact.inboundFeedId,

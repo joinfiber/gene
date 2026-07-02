@@ -174,6 +174,21 @@ class InMemoryRelay implements RelayTransport {
   /// Test helper: the ids of media blobs currently stored.
   Iterable<String> get mediaIds => _media.keys;
 
+  /// Test helper mirroring the real relay's TTL sweep: destroy an undelivered
+  /// entry WITHOUT advancing the acked watermark (sweeps don't ack).
+  void sweepEntry(String feedId, int seq) {
+    _entries[feedId]?.removeWhere((e) => e.seq == seq);
+  }
+
+  /// Test helper: a snapshot of a stored entry's ciphertext (what a wiretap of
+  /// the relay would capture), for forward-secrecy assertions.
+  List<int>? entryCiphertext(String feedId, int seq) {
+    for (final e in _entries[feedId] ?? const <FeedEntry>[]) {
+      if (e.seq == seq) return List.of(e.ciphertext);
+    }
+    return null;
+  }
+
   @override
   Future<void> putMedia(String id, List<int> bytes) async => _media[id] = bytes;
 

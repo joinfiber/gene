@@ -55,7 +55,7 @@ relay/                                   the zero-knowledge relay (TypeScript; W
 2. **`K` and identity private keys never leave the device.** Only public keys and sealed blobs cross the wire.
 3. **Per-feed keys, never the identity key, sign feed writes** (un-linkability — BACKEND.md §5).
 4. **The link secret `S` lives only in the URL `#fragment`.** Don't move it into a path/query or send it to the server.
-5. **Crypto goes through `Crypto`** (`lib/src/crypto/primitives.dart`). Of `lib/src/messaging/message_crypto.dart`, only the signed-entry bytes (`signedMessage`) cross the boundary and must stay byte-compatible with `relay/src/codec.ts`; the per-message subkey derivation and sealing are **client-only** — the relay (`crypto.ts`) merely verifies Ed25519 and never derives a subkey or opens anything.
+5. **Crypto goes through `Crypto`** (`lib/src/crypto/primitives.dart`). Of `lib/src/messaging/message_crypto.dart`, only the signed-entry bytes (`signedMessage`) cross the boundary and must stay byte-compatible with `relay/src/codec.ts`; the per-feed ratchet (`chainRoot`/`nextChainKey`/`messageKey`) and sealing are **client-only** — the relay (`crypto.ts`) merely verifies Ed25519 and never derives a key or opens anything.
 
 ## Build · run · test
 
@@ -83,7 +83,8 @@ must point at the **same** relay to pair.
 
 ## Glossary
 
-- **Conversation key `K`** — the per-relationship root key from pairing's ECDH; every message subkey derives from it.
+- **Conversation key `K`** — the per-relationship root from pairing's ECDH. Split into two per-feed **ratchet chains** at pairing time and then discarded — never stored.
+- **Ratchet chain** — a per-feed one-way hash chain (`message_crypto.dart`): each entry's key is `messageKey(chain)`, the chain advances `nextChainKey` and the old key is deleted. This is what gives **forward secrecy**.
 - **Feed** — one direction of a conversation: append-only, signed by a per-feed key, read by capability (holding its unguessable id).
 - **Missive** — one video message (the sealed feed entry references its encrypted R2 blob + that blob's key).
 - **Capability** — holding a feed's unguessable id authorizes reading it.
